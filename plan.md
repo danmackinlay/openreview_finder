@@ -551,6 +551,7 @@ def index(force, batch_size, model):
     logger.info(f"Search index built successfully with {len(df)} papers")
     logger.info("You can now search papers using 'openreview-finder search \"your query\"'")
 
+
 @cli.command()
 @click.argument('query')
 @click.option('--num-results', '-n', default=10, help='Number of results to return')
@@ -574,18 +575,54 @@ def search(query, num_results, category, format, output, author, keyword):
     formatted_results = searcher.format_results(results, output_format=format)
 
     if output:
-        if format == 'json':
-            with open(output, 'w') as f:
-                f.write(formatted_results)
-        elif format == 'csv':
-            with open(output, 'w') as f:
-                f.write(formatted_results)
-        else:
-            with open(output, 'w') as f:
-                f.write(formatted_results)
-        click.echo(f"Results saved to {output}")
+        save_results(
+            results if format == 'json' else formatted_results,
+            output_file=output,
+            output_format=format
+        )
     else:
         click.echo(formatted_results)
 
-    click.echo(f"\nFound {len(results)} papers matching
+    click.echo(f"\nFound {len(results)} papers matching your query.")
+
+@cli.command()
+@click.option('--num-papers', '-n', default=10, help='Number of papers to list')
+@click.option('--category', '-c', type=click.Choice(['oral', 'spotlight', 'poster']), help='Filter by paper category')
+def list(num_papers, category):
+    """List available papers in the database"""
+    papers_file = os.path.join(DATA_DIR, "iclr2025_papers.json")
+
+    if not os.path.exists(papers_file):
+        click.echo("No paper data found. Run 'openreview-finder index' first.")
+        return
+
+    # Load papers
+    try:
+        with open(papers_file, 'r') as f:
+            import json
+            papers = json.load(f)
+    except Exception as e:
+        click.echo(f"Error loading papers: {e}")
+        return
+
+    # Filter by category if specified
+    if category:
+        papers = [p for p in papers if p['category'] == category]
+
+    # Limit number of papers
+    papers = papers[:num_papers]
+
+    # Display papers
+    for i, paper in enumerate(papers):
+        click.echo(f"\n{i+1}. {paper['title']}")
+        click.echo(f"   Category: {paper['category'].upper()}")
+        click.echo(f"   Authors: {', '.join(paper['authors'][:3])}" +
+                  (f" (+{len(paper['authors'])-3} more)" if len(paper['authors']) > 3 else ""))
+        if 'author_emails' in paper and paper['author_emails']:
+            click.echo(f"   Emails: {', '.join(paper['author_emails'][:2])}" +
+                      (f" (+{len(paper['author_emails'])-2} more)" if len(paper['author_emails']) > 2 else ""))
+        click.echo(f"   URL: {paper['forum_url']}")
+
+if __name__ == '__main__':
+    cli()
 ```
