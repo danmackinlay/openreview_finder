@@ -159,97 +159,89 @@ class OpenReviewFinder:
     def extract_papers(self):
         """Extract papers from OpenReview using API2"""
         client = self.get_client()
-        
-        # With API2, we don't need to query by specific invitation categories
-        # Instead, we'll get all papers and filter by decision afterward
-        categories = [
-            {"name": "all", "venue": "ICLR.cc/2025/Conference"}
-        ]
 
-        # Process categories not already completed
-        for category in categories:
-            if category["name"] in self.checkpoint["completed_categories"]:
-                logger.info(f"Skipping {category['name']} papers (already completed)")
-                continue
+        logger.info("Fetching papers from ICLR 2025...")
+        try:
+            # Using the API2 client with the successful invitation parameter
+            papers = client.get_notes(invitation="ICLR.cc/2025/Conference/-/Submission")
+            logger.info(f"Found {len(papers)} papers from ICLR 2025")
 
-            logger.info(f"Fetching papers from {category['venue']}...")
-            try:
-                # Using the API2 client to get papers
-                get_notes = with_retry(client.get_notes)
-                papers = get_notes(content={'venue': category['venue']},
-                                  details='directReplies')
+            for paper in tqdm(papers, desc="Processing papers"):
+                # Skip if already processed
+                if paper.id in self.checkpoint["extracted_papers"]:
+                    continue
 
-                for paper in tqdm(papers, desc=f"Processing {category['name']} papers"):
-                    # Skip if already processed
-                    if paper.id in self.checkpoint["extracted_papers"]:
-                        continue
+                # Determine paper category based on decisions if available
+                category = "poster"  # Default category
+                try:
+                    # Get decision notes for this paper
+                    decision_notes = client.get_notes(
+                        invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
+                        forum=paper.id,
+                    )
 
-                    # Try to get author emails with retry
-                    author_emails = []
-                    try:
-                        # With API2, we can get author information directly from the paper details
-                        author_profiles = paper.details.get('original', {}).get('authors', [])
-                        author_emails = []
-                        for profile in author_profiles:
-                            if hasattr(profile, 'emails') and profile.emails:
-                                author_emails.extend(profile.emails)
-                    except Exception as e:
-                        logger.warning(
-                            f"Could not get emails for paper {paper.id}: {e}"
+                    if decision_notes:
+                        decision_text = (
+                            decision_notes[0].content.get("decision", "").lower()
                         )
+                        if "oral" in decision_text:
+                            category = "oral"
+                        elif "spotlight" in decision_text:
+                            category = "spotlight"
+                except Exception as e:
+                    logger.warning(f"Could not get decision for paper {paper.id}: {e}")
 
-                    # In API2, content fields might be nested under 'original' in details
-                    content = {}
-                    if hasattr(paper, 'content'):
-                        content = paper.content
-                    elif hasattr(paper, 'details') and hasattr(paper.details, 'original'):
-                        content = paper.details.original.content if hasattr(paper.details.original, 'content') else {}
-                    
-                    # Determine the paper category based on decision if available
-                    decision = "poster"  # Default category if not specified
-                    try:
-                        for reply in paper.details.get('directReplies', []):
-                            if reply.get('invitation', '').endswith('Decision'):
-                                decision_text = reply.get('content', {}).get('decision', '')
-                                if 'oral' in decision_text.lower():
-                                    decision = 'oral'
-                                elif 'spotlight' in decision_text.lower():
-                                    decision = 'spotlight'
-                                break
-                    except Exception:
-                        pass  # Stick with default if we can't get the decision
-                    
-                    paper_dict = {
-                        "id": paper.id,
-                        "number": paper.number if hasattr(paper, 'number') else '',
-                        "title": content.get("title", "[No Title]"),
-                        "abstract": content.get("abstract", ""),
-                        "authors": content.get("authors", []),
-                        "author_emails": author_emails,
-                        "keywords": content.get("keywords", []),
-                        "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
-                        "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
-                        "category": decision,
-                    }
-                    self.checkpoint["extracted_papers"][paper.id] = paper_dict
+                # Process paper data
+                paper_dict = {
+                    "id": paper.id,
+                    "number": paper.number if hasattr(paper, "number") else "",
+                    "title": paper.content.get("title", "[No Title]"),
+                    "abstract": paper.content.get("abstract", ""),
+                    "authors": paper.content.get("authors", []),
+                    "author_emails": self._get_author_emails(paper),
+                    "keywords": paper.content.get("keywords", []),
+                    "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
+                    "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
+                    "category": category,
+                }
 
-                    # Save checkpoint periodically
-                    if len(self.checkpoint["extracted_papers"]) % 20 == 0:
-                        self._save_checkpoint()
+                self.checkpoint["extracted_papers"][paper.id] = paper_dict
 
-                # Mark this category as completed
-                self.checkpoint["completed_categories"].append(category["name"])
-                self._save_checkpoint()
+                # Save checkpoint periodically
+                if len(self.checkpoint["extracted_papers"]) % 20 == 0:
+                    self._save_checkpoint()
 
-            except Exception as e:
-                logger.error(f"Error fetching {category['name']} papers: {e}")
-                self._save_checkpoint()  # Save progress before continuing
-                continue
+        except Exception as e:
+            logger.error(f"Error fetching papers: {e}")
+            self._save_checkpoint()  # Save progress before exiting
 
         # Return all papers as a list
         papers = list(self.checkpoint["extracted_papers"].values())
         logger.info(f"Extracted {len(papers)} papers from ICLR 2025")
         return papers
+
+
+    def _get_author_emails(self, paper):
+        """Helper function to extract author emails"""
+        author_emails = []
+        try:
+            # Try to get author information from API2
+            if hasattr(paper, "details") and hasattr(paper.details, "authors"):
+                for author in paper.details.authors:
+                    if hasattr(author, "emails"):
+                        author_emails.extend(author.emails)
+            else:
+                # Try alternative approach for API2
+                client = self.get_client()
+                author_group = client.get_group(
+                    f"ICLR.cc/2025/Conference/Paper{paper.number}/Authors"
+                )
+                if hasattr(author_group, "members"):
+                    author_emails = author_group.members
+        except Exception as e:
+            logger.warning(f"Could not retrieve emails for paper {paper.id}: {e}")
+
+        return author_emails
 
     def build_index(self, batch_size=50, force=False):
         """Build search index with ChromaDB and SPECTER2 embeddings"""
