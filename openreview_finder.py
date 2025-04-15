@@ -4,7 +4,6 @@ import json
 import click
 import torch
 import pandas as pd
-import openreview
 from openreview import api
 import chromadb
 from tqdm.auto import tqdm
@@ -14,6 +13,7 @@ import logging
 import time
 from transformers import AutoTokenizer
 from adapters import AutoAdapterModel
+# import pprint
 
 # Setup logging
 logging.basicConfig(
@@ -162,7 +162,7 @@ class OpenReviewFinder:
         if self.client is None:
             try:
                 self.client = with_retry(api.OpenReviewClient)(
-                    baseurl="https://api2.openreview.net"
+                    baseurl="https://api2.openreview.net",
                 )
             except Exception as e:
                 logger.error(f"Failed to connect to OpenReview API2: {e}")
@@ -192,19 +192,18 @@ class OpenReviewFinder:
         logger.info(f"Fetching papers from ICLR.cc/2025/Conference...")
         all_papers = []
         offset = 0
-        limit = 1000
 
         while True:
             try:
                 # Use retry wrapper for rate-limited API calls
                 get_notes_with_retry = with_retry(client.get_notes)
-                
+
                 # Get batch of papers with pagination
                 papers = get_notes_with_retry(
                     invitation="ICLR.cc/2025/Conference/-/Submission",
-                    details="original,directReplies",  # Request essential details
+                    details="original,directReplies,tags,revisions",
                     offset=offset,
-                    limit=limit
+                    limit=1000,  # Maximize batch size
                 )
 
                 logger.info(f"Retrieved {len(papers)} papers (offset={offset})")
@@ -225,10 +224,10 @@ class OpenReviewFinder:
                     category = "poster"  # Default category
                     try:
                         # Try to get decision from directReplies first (avoid additional API call)
-                        if (hasattr(paper, "details") and 
-                            hasattr(paper.details, "directReplies") and 
+                        if (hasattr(paper, "details") and
+                            hasattr(paper.details, "directReplies") and
                             paper.details.directReplies):
-                            
+
                             # Look through direct replies for decision notes
                             for reply in paper.details.directReplies:
                                 if hasattr(reply, "invitation") and "Decision" in reply.invitation:
@@ -239,12 +238,12 @@ class OpenReviewFinder:
                                         elif "spotlight" in decision_text:
                                             category = "spotlight"
                                         break
-                        
+
                         # Only make a separate API call for decisions if we couldn't find it in directReplies
                         elif hasattr(paper, "number") and paper.number:
                             # Use our retry wrapper for rate-limited API calls
                             get_notes_with_retry = with_retry(client.get_notes)
-                            
+
                             # Get decision notes for this paper
                             decision_notes = get_notes_with_retry(
                                 invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
@@ -269,24 +268,26 @@ class OpenReviewFinder:
                         "title": paper.content.get("title", "[No Title]"),
                         "abstract": paper.content.get("abstract", ""),
                         "authors": paper.content.get("authors", []),
-                        "author_emails": self._get_author_emails(paper),
+                        # "author_emails": self._get_author_emails(paper),
                         "keywords": paper.content.get("keywords", []),
                         "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
                         "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
                         "category": category,
                     }
+                    # Print paper details for debugging
+                    # logger.info(f"Paper details for {paper.id}:")
+                    # logger.info(pprint.pformat(paper_dict, indent=2))
                     self.checkpoint["extracted_papers"][paper.id] = paper_dict
 
 
                 # Save checkpoint after each batch
                 self._save_checkpoint()
+                if not papers:
+                    break
 
                 # Prepare for next batch
                 offset += len(papers)
 
-                # If we got fewer papers than the limit, we've reached the end
-                if len(papers) < limit:
-                    break
 
             except Exception as e:
                 logger.error(f"Error fetching papers: {e}")
@@ -297,43 +298,43 @@ class OpenReviewFinder:
         logger.info(f"Extracted {len(papers)} papers from ICLR 2025")
         return papers
 
-    def _get_author_emails(self, paper):
-        """Extract author emails using API2 structure"""
-        author_emails = []
+    # def _get_author_emails(self, paper):
+    #     """Extract author emails using API2 structure"""
+    #     author_emails = []
 
-        try:
-            # Method 1: Try to get from details.original
-            if hasattr(paper, "details") and hasattr(paper.details, "original"):
-                if (
-                    hasattr(paper.details.original, "content")
-                    and "authorids" in paper.details.original.content
-                ):
-                    # Author IDs are often email addresses
-                    author_emails = paper.details.original.content.get("authorids", [])
+    #     try:
+    #         # Method 1: Try to get from details.original
+    #         if hasattr(paper, "details") and hasattr(paper.details, "original"):
+    #             if (
+    #                 hasattr(paper.details.original, "content")
+    #                 and "authorids" in paper.details.original.content
+    #             ):
+    #                 # Author IDs are often email addresses
+    #                 author_emails = paper.details.original.content.get("authorids", [])
 
-            # Method 2: Try to get from details.original.authors
-            if (
-                not author_emails
-                and hasattr(paper, "details")
-                and "original" in paper.details
-            ):
-                if "authors" in paper.details.original:
-                    for author in paper.details.original.authors:
-                        if hasattr(author, "emails"):
-                            author_emails.extend(author.emails)
+    #         # Method 2: Try to get from details.original.authors
+    #         if (
+    #             not author_emails
+    #             and hasattr(paper, "details")
+    #             and "original" in paper.details
+    #         ):
+    #             if "authors" in paper.details.original:
+    #                 for author in paper.details.original.authors:
+    #                     if hasattr(author, "emails"):
+    #                         author_emails.extend(author.emails)
 
-            # Method 3: Get from content directly (sometimes available)
-            if (
-                not author_emails
-                and hasattr(paper, "content")
-                and "authorids" in paper.content
-            ):
-                author_emails = paper.content.get("authorids", [])
+    #         # Method 3: Get from content directly (sometimes available)
+    #         if (
+    #             not author_emails
+    #             and hasattr(paper, "content")
+    #             and "authorids" in paper.content
+    #         ):
+    #             author_emails = paper.content.get("authorids", [])
 
-        except Exception as e:
-            logger.warning(f"Could not retrieve emails for paper {paper.id}: {e}")
+    #     except Exception as e:
+    #         logger.warning(f"Could not retrieve emails for paper {paper.id}: {e}")
 
-        return author_emails
+    #     return author_emails
 
     def build_index(self, batch_size=50, force=False):
         """Build search index with ChromaDB and SPECTER2 embeddings"""
