@@ -381,11 +381,18 @@ def cli():
     pass
 
 @cli.command()
-@click.option('--force', is_flag=True, help='Force reindexing even if index already exists')
+@click.option('--force', is_flag=True, help='Force reindexing and re-extraction of papers')
 @click.option('--batch-size', default=50, help='Batch size for indexing')
 def index(force, batch_size):
     """Extract papers from OpenReview and build the search index"""
     start_time = time.time()
+    
+    # Reset extraction checkpoint if forced
+    if force and os.path.exists(CHECKPOINT_FILE):
+        logger.info("Force flag set, deleting extraction checkpoint...")
+        os.remove(CHECKPOINT_FILE)
+        logger.info(f"Deleted checkpoint file: {CHECKPOINT_FILE}")
+    
     finder = OpenReviewFinder()
     finder.build_index(batch_size=batch_size, force=force)
     elapsed = time.time() - start_time
