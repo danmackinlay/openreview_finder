@@ -2,7 +2,6 @@
 import os
 import json
 import time
-import shelve
 import re
 import logging
 import click
@@ -82,6 +81,7 @@ def with_retry(func, max_attempts=5):
 
     return wrapper
 
+
 def clean_field(field):
     """Ensure that a field is a primitive type.
     If it's a dict with a 'value' key, return that value.
@@ -92,6 +92,7 @@ def clean_field(field):
     elif isinstance(field, list):
         return [clean_field(item) for item in field]
     return field
+
 
 def join_list_values(metadata):
     """
@@ -111,6 +112,7 @@ def join_list_values(metadata):
         else:
             sanitized[key] = value
     return sanitized
+
 
 # ===================
 # Simple Disk Cache Using shelve
@@ -228,6 +230,7 @@ class CachedOpenReviewClient:
             self.cache.set(key, result)
             return result
 
+
 # ===================
 # OpenReview Finder
 # ===================
@@ -284,7 +287,9 @@ class OpenReviewFinder:
                 if not papers:
                     break
 
-                for i, paper in tqdm(enumerate(papers), desc=f"Processing offset {offset}"):
+                for i, paper in tqdm(
+                    enumerate(papers), desc=f"Processing offset {offset}"
+                ):
                     # if i == 0:  # Print the first note as a sample.
                     #     print_raw_note(paper)
                     if paper.id in papers_dict:
@@ -331,7 +336,8 @@ class OpenReviewFinder:
                             a for a in clean_field(paper.content.get("authors", []))
                         ],
                         "keywords": [
-                            k.lower() for k in clean_field(paper.content.get("keywords", []))
+                            k.lower()
+                            for k in clean_field(paper.content.get("keywords", []))
                         ],
                         "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
                         "forum_url": f"https://openreview.net/forum?id={getattr(paper, 'forum', paper.id)}",
