@@ -5,6 +5,7 @@ import click
 import torch
 import pandas as pd
 import openreview
+from openreview import api
 import chromadb
 from tqdm.auto import tqdm
 from tabulate import tabulate
@@ -71,7 +72,7 @@ class SPECTER2Embedder:
 
         # Load and activate the proximity adapter
         logger.info("Loading SPECTER2 proximity adapter...")
-        adapter_name = self.model.load_adapter(
+        self.model.load_adapter(
             "allenai/specter2", source="hf", load_as="proximity", set_active=True
         )
 
@@ -128,14 +129,14 @@ class OpenReviewFinder:
         self._load_checkpoint()
 
     def get_client(self):
-        """Get OpenReview client with simple retry"""
+        """Get OpenReview client with simple retry using API2 endpoint"""
         if self.client is None:
             try:
-                self.client = with_retry(openreview.Client)(
-                    baseurl="https://api.openreview.net"
+                self.client = with_retry(api.OpenReviewClient)(
+                    baseurl="https://api2.openreview.net"
                 )
             except Exception as e:
-                logger.error(f"Failed to connect to OpenReview: {e}")
+                logger.error(f"Failed to connect to OpenReview API2: {e}")
                 raise
         return self.client
 
@@ -156,20 +157,13 @@ class OpenReviewFinder:
         )
 
     def extract_papers(self):
-        """Extract papers from OpenReview with robust checkpointing"""
+        """Extract papers from OpenReview using API2"""
         client = self.get_client()
-
-        # Categories to extract
+        
+        # With API2, we don't need to query by specific invitation categories
+        # Instead, we'll get all papers and filter by decision afterward
         categories = [
-            {"name": "oral", "invitation": "ICLR.cc/2025/Conference/-/Oral_Submission"},
-            {
-                "name": "spotlight",
-                "invitation": "ICLR.cc/2025/Conference/-/Spotlight_Submission",
-            },
-            {
-                "name": "poster",
-                "invitation": "ICLR.cc/2025/Conference/-/Poster_Submission",
-            },
+            {"name": "all", "venue": "ICLR.cc/2025/Conference"}
         ]
 
         # Process categories not already completed
@@ -178,10 +172,12 @@ class OpenReviewFinder:
                 logger.info(f"Skipping {category['name']} papers (already completed)")
                 continue
 
-            logger.info(f"Fetching {category['name']} papers...")
+            logger.info(f"Fetching papers from {category['venue']}...")
             try:
-                get_notes = with_retry(client.get_all_notes)
-                papers = get_notes(invitation=category["invitation"])
+                # Using the API2 client to get papers
+                get_notes = with_retry(client.get_notes)
+                papers = get_notes(content={'venue': category['venue']},
+                                  details='directReplies')
 
                 for paper in tqdm(papers, desc=f"Processing {category['name']} papers"):
                     # Skip if already processed
@@ -191,31 +187,49 @@ class OpenReviewFinder:
                     # Try to get author emails with retry
                     author_emails = []
                     try:
-                        get_group = with_retry(client.get_group)
-                        authors_group = get_group(
-                            f"ICLR.cc/2025/Conference/Paper{paper.number}/Authors"
-                        )
-                        author_emails = (
-                            authors_group.members
-                            if hasattr(authors_group, "members")
-                            else []
-                        )
+                        # With API2, we can get author information directly from the paper details
+                        author_profiles = paper.details.get('original', {}).get('authors', [])
+                        author_emails = []
+                        for profile in author_profiles:
+                            if hasattr(profile, 'emails') and profile.emails:
+                                author_emails.extend(profile.emails)
                     except Exception as e:
                         logger.warning(
-                            f"Could not get emails for paper {paper.number}: {e}"
+                            f"Could not get emails for paper {paper.id}: {e}"
                         )
 
+                    # In API2, content fields might be nested under 'original' in details
+                    content = {}
+                    if hasattr(paper, 'content'):
+                        content = paper.content
+                    elif hasattr(paper, 'details') and hasattr(paper.details, 'original'):
+                        content = paper.details.original.content if hasattr(paper.details.original, 'content') else {}
+                    
+                    # Determine the paper category based on decision if available
+                    decision = "poster"  # Default category if not specified
+                    try:
+                        for reply in paper.details.get('directReplies', []):
+                            if reply.get('invitation', '').endswith('Decision'):
+                                decision_text = reply.get('content', {}).get('decision', '')
+                                if 'oral' in decision_text.lower():
+                                    decision = 'oral'
+                                elif 'spotlight' in decision_text.lower():
+                                    decision = 'spotlight'
+                                break
+                    except Exception:
+                        pass  # Stick with default if we can't get the decision
+                    
                     paper_dict = {
                         "id": paper.id,
-                        "number": paper.number,
-                        "title": paper.content["title"],
-                        "abstract": paper.content.get("abstract", ""),
-                        "authors": paper.content.get("authors", []),
+                        "number": paper.number if hasattr(paper, 'number') else '',
+                        "title": content.get("title", "[No Title]"),
+                        "abstract": content.get("abstract", ""),
+                        "authors": content.get("authors", []),
                         "author_emails": author_emails,
-                        "keywords": paper.content.get("keywords", []),
+                        "keywords": content.get("keywords", []),
                         "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
-                        "forum_url": f"https://openreview.net/forum?id={paper.forum}",
-                        "category": category["name"],
+                        "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
+                        "category": decision,
                     }
                     self.checkpoint["extracted_papers"][paper.id] = paper_dict
 
