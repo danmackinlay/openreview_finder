@@ -33,55 +33,6 @@ os.makedirs(CHROMA_DB_PATH, exist_ok=True)
 os.makedirs(os.path.dirname(CHECKPOINT_FILE), exist_ok=True)
 
 
-# Enhanced retry function with rate limiting awareness
-def with_retry(func, max_attempts=5):
-    """Retry decorator with adaptive backoff for rate limits"""
-
-    def wrapper(*args, **kwargs):
-        attempts = 0
-        last_error = None
-
-        while attempts < max_attempts:
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                attempts += 1
-                last_error = e
-                
-                # Default exponential backoff
-                wait_time = 2**attempts
-                
-                # Check if this is a rate limit error (response code 429)
-                rate_limited = False
-                
-                # Try to extract rate limit information
-                if hasattr(e, 'status_code') and e.status_code == 429:
-                    rate_limited = True
-                elif str(e).find('429') >= 0 or str(e).lower().find('rate limit') >= 0:
-                    rate_limited = True
-                
-                # Try to parse wait time from error message
-                if rate_limited:
-                    import re
-                    wait_match = re.search(r'try again in (\d+) seconds', str(e).lower())
-                    if wait_match:
-                        wait_time = int(wait_match.group(1)) + 1  # Add buffer
-                    else:
-                        wait_time = 30  # Default wait for rate limits
-                        
-                    logger.warning(f"Rate limit hit. Waiting for {wait_time}s before retrying...")
-                else:
-                    logger.warning(
-                        f"Attempt {attempts} failed: {e}. Retrying in {wait_time}s..."
-                    )
-                    
-                time.sleep(wait_time)
-
-        logger.error(f"All {max_attempts} attempts failed. Last error: {last_error}")
-        raise last_error
-
-    return wrapper
-
 
 class SPECTER2Embedder:
     """SPECTER2 embedder using the adapters library"""
@@ -143,6 +94,60 @@ class SPECTER2Embedder:
                 all_embeddings.extend(batch_embeddings.tolist())
 
         return all_embeddings
+
+# Enhanced retry function with rate limiting awareness
+def with_retry(func, max_attempts=5):
+    """Retry decorator with adaptive backoff for rate limits"""
+
+    def wrapper(*args, **kwargs):
+        attempts = 0
+        last_error = None
+
+        while attempts < max_attempts:
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                attempts += 1
+                last_error = e
+
+                # Default exponential backoff
+                wait_time = 2**attempts
+
+                # Check if this is a rate limit error (response code 429)
+                rate_limited = False
+
+                # Try to extract rate limit information
+                if hasattr(e, "status_code") and e.status_code == 429:
+                    rate_limited = True
+                elif str(e).find("429") >= 0 or str(e).lower().find("rate limit") >= 0:
+                    rate_limited = True
+
+                # Try to parse wait time from error message
+                if rate_limited:
+                    import re
+
+                    wait_match = re.search(
+                        r"try again in (\d+) seconds", str(e).lower()
+                    )
+                    if wait_match:
+                        wait_time = int(wait_match.group(1)) + 1  # Add buffer
+                    else:
+                        wait_time = 30  # Default wait for rate limits
+
+                    logger.warning(
+                        f"Rate limit hit. Waiting for {wait_time}s before retrying..."
+                    )
+                else:
+                    logger.warning(
+                        f"Attempt {attempts} failed: {e}. Retrying in {wait_time}s..."
+                    )
+
+                time.sleep(wait_time)
+
+        logger.error(f"All {max_attempts} attempts failed. Last error: {last_error}")
+        raise last_error
+
+    return wrapper
 
 
 class OpenReviewFinder:
@@ -219,20 +224,41 @@ class OpenReviewFinder:
                     # Determine paper category based on decisions if available
                     category = "poster"  # Default category
                     try:
-                        # Get decision notes for this paper
-                        decision_notes = client.get_notes(
-                            invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
-                            forum=paper.id,
-                        )
-
-                        if decision_notes:
-                            decision_text = (
-                                decision_notes[0].content.get("decision", "").lower()
+                        # Try to get decision from directReplies first (avoid additional API call)
+                        if (hasattr(paper, "details") and 
+                            hasattr(paper.details, "directReplies") and 
+                            paper.details.directReplies):
+                            
+                            # Look through direct replies for decision notes
+                            for reply in paper.details.directReplies:
+                                if hasattr(reply, "invitation") and "Decision" in reply.invitation:
+                                    if hasattr(reply, "content") and "decision" in reply.content:
+                                        decision_text = reply.content["decision"].lower()
+                                        if "oral" in decision_text:
+                                            category = "oral"
+                                        elif "spotlight" in decision_text:
+                                            category = "spotlight"
+                                        break
+                        
+                        # Only make a separate API call for decisions if we couldn't find it in directReplies
+                        elif hasattr(paper, "number") and paper.number:
+                            # Use our retry wrapper for rate-limited API calls
+                            get_notes_with_retry = with_retry(client.get_notes)
+                            
+                            # Get decision notes for this paper
+                            decision_notes = get_notes_with_retry(
+                                invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
+                                forum=paper.id,
                             )
-                            if "oral" in decision_text:
-                                category = "oral"
-                            elif "spotlight" in decision_text:
-                                category = "spotlight"
+
+                            if decision_notes:
+                                decision_text = (
+                                    decision_notes[0].content.get("decision", "").lower()
+                                )
+                                if "oral" in decision_text:
+                                    category = "oral"
+                                elif "spotlight" in decision_text:
+                                    category = "spotlight"
                     except Exception as e:
                         logger.warning(f"Could not get decision for paper {paper.id}: {e}")
 
@@ -250,7 +276,6 @@ class OpenReviewFinder:
                         "category": category,
                     }
                     self.checkpoint["extracted_papers"][paper.id] = paper_dict
-
 
 
                 # Save checkpoint after each batch
