@@ -186,28 +186,26 @@ class OpenReviewFinder:
         )
 
     def extract_papers(self):
-        """Extract papers from OpenReview using API2 with efficient batch processing"""
+        """Extract papers from OpenReview using API2 with filtering for accepted papers"""
         client = self.get_client()
 
         logger.info(f"Fetching papers from ICLR.cc/2025/Conference...")
-        all_papers = []
+        accepted_papers = []  # Only store accepted papers
         offset = 0
         limit = 1000  # Maximum batch size to minimize API calls
-
-        # Create a simple cache for API calls to avoid repeating calls for the same paper
-        decision_cache = {}
+        decision_cache = {}  # Cache decisions to avoid redundant processing
 
         while True:
             try:
                 # Use retry wrapper for rate-limited API calls
                 get_notes_with_retry = with_retry(client.get_notes)
 
-                # Get batch of papers with pagination - include directReplies in one call to get decisions
+                # Get batch of papers with pagination - include directReplies to get decisions
                 papers = get_notes_with_retry(
                     invitation="ICLR.cc/2025/Conference/-/Submission",
                     details="directReplies,original",  # Fetch decisions in the same call
                     offset=offset,
-                    limit=limit,  # Maximum batch size
+                    limit=limit  # Maximum batch size
                 )
 
                 batch_count = len(papers)
@@ -216,69 +214,66 @@ class OpenReviewFinder:
                 if not papers:
                     break  # No more papers to retrieve
 
-                all_papers.extend(papers)
+                # Filter for accepted papers only
+                batch_accepted = []
+                for paper in papers:
+                    # Check if paper has decision information
+                    is_accepted = False
+                    if (hasattr(paper, "details") and
+                        hasattr(paper.details, "directReplies") and
+                        paper.details.directReplies):
 
-                # Process this batch of papers
+                        for reply in paper.details.directReplies:
+                            # Look for decision notes
+                            if (hasattr(reply, "invitation") and "Decision" in reply.invitation and
+                                hasattr(reply, "content") and "decision" in reply.content):
+
+                                decision_text = reply.content["decision"].lower()
+                                decision_cache[paper.id] = decision_text
+
+                                # Only keep accepted papers (reject "reject" decisions)
+                                if "reject" not in decision_text:
+                                    is_accepted = True
+                                    batch_accepted.append(paper)
+                                break
+
+                logger.info(f"Found {len(batch_accepted)} accepted papers in this batch of {batch_count}")
+                accepted_papers.extend(batch_accepted)
+
+                # Process only accepted papers from this batch
                 for paper in tqdm(
-                    papers, desc=f"Processing papers (offset={offset})"
-                ):                # Skip if already processed
+                    batch_accepted, desc=f"Processing accepted papers (offset={offset})"
+                ):
+                    # Skip if already processed
                     if paper.id in self.checkpoint["extracted_papers"]:
                         continue
 
-                    # Determine paper category based on decisions if available
+                    # Determine paper category (oral/spotlight/poster) based on decisions
                     category = "poster"  # Default category
                     try:
-                        # Try to get decision from directReplies included in the batch query
-                        # This avoids additional API calls for each paper
-                        if (hasattr(paper, "details") and
-                            hasattr(paper.details, "directReplies") and
-                            paper.details.directReplies):
-
-                            # Look through direct replies for decision notes
-                            found_decision = False
-                            for reply in paper.details.directReplies:
-                                if (hasattr(reply, "invitation") and "Decision" in reply.invitation and
-                                    hasattr(reply, "content") and "decision" in reply.content):
-
-                                    decision_text = reply.content["decision"].lower()
-                                    # Cache the decision in case we need it again
-                                    decision_cache[paper.id] = decision_text
-
-                                    if "oral" in decision_text:
-                                        category = "oral"
-                                    elif "spotlight" in decision_text:
-                                        category = "spotlight"
-
-                                    found_decision = True
-                                    break
-
-                            # If decision wasn't in directReplies, check if we've cached it
-                            if not found_decision and paper.id in decision_cache:
-                                decision_text = decision_cache[paper.id]
-                                if "oral" in decision_text:
-                                    category = "oral"
-                                elif "spotlight" in decision_text:
-                                    category = "spotlight"
+                        # Use cached decision text from our filtering step
+                        if paper.id in decision_cache:
+                            decision_text = decision_cache[paper.id]
+                            if "oral" in decision_text:
+                                category = "oral"
+                            elif "spotlight" in decision_text:
+                                category = "spotlight"
 
                     except Exception as e:
                         logger.warning(f"Error determining category for paper {paper.id}: {e}")
 
-                    # Process paper data
+                    # Process accepted paper data
                     paper_dict = {
                         "id": paper.id,
                         "number": paper.number if hasattr(paper, "number") else "",
                         "title": paper.content.get("title", "[No Title]"),
                         "abstract": paper.content.get("abstract", ""),
                         "authors": paper.content.get("authors", []),
-                        # "author_emails": self._get_author_emails(paper),
                         "keywords": paper.content.get("keywords", []),
                         "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
                         "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
                         "category": category,
                     }
-                    # Print paper details for debugging
-                    # logger.info(f"Paper details for {paper.id}:")
-                    # logger.info(pprint.pformat(paper_dict, indent=2))
                     self.checkpoint["extracted_papers"][paper.id] = paper_dict
 
 
@@ -295,9 +290,9 @@ class OpenReviewFinder:
                 logger.error(f"Error fetching papers: {e}")
                 self._save_checkpoint()  # Save progress before exiting
 
-        # Return all papers as a list
+        # Return only accepted papers from our checkpoint
         papers = list(self.checkpoint["extracted_papers"].values())
-        logger.info(f"Extracted {len(papers)} papers from ICLR 2025")
+        logger.info(f"Extracted {len(papers)} accepted papers from ICLR 2025")
         return papers
 
     # def _get_author_emails(self, paper):
