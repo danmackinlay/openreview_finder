@@ -16,19 +16,12 @@ A tool for extracting and semantically searching ICLR 2025 papers using SPECTER2
    uv pip install -e .
    ```
 
-   Alternatively, you can use pip:
-   ```
-   pip install -e .
-   ```
-
 ## Features
 
 - Extract papers with full metadata from OpenReview, including author emails
 - Create semantic embeddings using SPECTER2 (specifically designed for academic papers)
 - Build a robust search index with ChromaDB
 - Search papers by semantic similarity, not just keywords
-- Filter results by category, author, or keywords
-- Export results in various formats (text, JSON, CSV)
 
 ## Usage
 

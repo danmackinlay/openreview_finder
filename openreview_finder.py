@@ -17,6 +17,10 @@ import numpy as np
 from tqdm.auto import tqdm
 from tabulate import tabulate
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
+from pprint import pformat
+import diskcache
+import pickle
+import zlib
 
 # OpenReview, chromadb, transformers, adapters
 from openreview import api
@@ -171,6 +175,18 @@ class DiskCache:
             if os.path.exists(self.cache_file):
                 os.remove(self.cache_file)
 
+def determine_publication_status(invitations):
+    """
+    Determine publication status based on invitations.
+    Returns a status string (e.g., 'published', 'withdrawn', or 'submission').
+    """
+    # Normalize all invitation strings
+    normalized = [invitation.lower() for invitation in invitations]
+    if any("camera_ready" in inv for inv in normalized):
+        return "published"
+    elif any("withdrawn" in inv for inv in normalized):
+        return "withdrawn"
+    return "submission"
 
 # ===================
 # SPECTER2 Embedder
@@ -254,43 +270,18 @@ class OpenReviewFinder:
     def __init__(self):
         self.api_client = CachedOpenReviewClient()
 
-    def fetch_all_decision_notes(self, limit=1000):
-        """Fetch all decision notes in batches and return as a list."""
-        all_decision_notes = []
-        offset = 0
-        while True:
-            batch = self.api_client.get_notes(
-                invitation="ICLR.cc/2025/Conference/-/Decision",
-                offset=offset,
-                limit=limit,
-            )
-            if not batch:
-                break
-            all_decision_notes.extend(batch)
-            offset += len(batch)
-        return all_decision_notes
 
     def extract_papers(self):
         logger.info("Fetching papers from ICLR 2025 conference...")
         papers_dict = {}
         offset = 0
 
-        # Fetch all decision notes in batches
-        logger.info("Fetching all decision notes in paginated batches...")
-        decision_notes_bulk = self.fetch_all_decision_notes(limit=1000)
-        # Build mapping from forum id (or paper id) to decision text
-        decision_mapping = {}
-        for note in decision_notes_bulk:
-            decision_text = note.content.get("decision", "").lower()
-            # Using forum (or another unique identifier) as key
-            decision_mapping[note.forum] = decision_text
-
         # Fetch submission papers in batches
         while True:
             try:
                 papers = self.api_client.get_notes(
                     invitation="ICLR.cc/2025/Conference/-/Submission",
-                    details="original,directReplies,tags,revisions",
+                    details="original,tags,revisions",
                     offset=offset,
                     limit=1000,
                 )
@@ -301,12 +292,13 @@ class OpenReviewFinder:
                 for i, paper in tqdm(
                     enumerate(papers), desc=f"Processing offset {offset}"
                 ):
-                    # if i == 0:  # Print the first note as a sample.
-                    #     print_raw_note(paper)
+                    if i == 0:  # Print the first note as a sample.
+                        logger.info(f"Sample paper structure:\n{pformat(paper, indent=4)}")
                     if paper.id in papers_dict:
                         continue
-
-                    # Category field has been removed as it's empty in the dataset
+                    status = determine_publication_status(paper.invitations)
+                    if status != "published":
+                        continue
                     paper_data = {
                         "id": paper.id,
                         "number": paper.number if hasattr(paper, "number") else "",
@@ -426,48 +418,48 @@ class OpenReviewFinder:
 
         # Initialize filters
         where_document = None
-        
+
         # Add author filter if provided
         if authors:
             # Create a filter for authors
             author_filters = []
             for auth in authors:
                 author_filters.append({"$contains": auth})
-            
+
             # If multiple authors, use $or to check for any
             if len(author_filters) > 1:
                 author_filter = {"$or": author_filters}
             else:
                 author_filter = author_filters[0]
-            
+
             where_document = author_filter
-        
+
         # Add keyword filter if provided
         if keywords:
             # Create a filter for keywords
             keyword_filters = []
             for kw in keywords:
                 keyword_filters.append({"$contains": kw})
-            
+
             # If multiple keywords, use $or to check for any
             if len(keyword_filters) > 1:
                 keyword_filter = {"$or": keyword_filters}
             else:
                 keyword_filter = keyword_filters[0]
-            
+
             # If we already have an author filter, combine with $and
             if where_document:
                 where_document = {"$and": [where_document, keyword_filter]}
             else:
                 where_document = keyword_filter
-        
+
         # Build query arguments
         query_args = dict(
             query_texts=[query],
             n_results=num_results,
             include=["metadatas", "documents", "distances", "embeddings"],
         )
-        
+
         # Add document filters if any
         if where_document:
             query_args["where_document"] = where_document
@@ -543,24 +535,24 @@ class OpenReviewFinder:
                 test_query = "test query"
                 logger.info(f"Running test query on collection: '{test_query}'")
                 test_results = collection.query(
-                    query_texts=[test_query], 
-                    n_results=1, 
+                    query_texts=[test_query],
+                    n_results=1,
                     include=["metadatas", "distances"]
                 )
-                
+
                 # Log the test query results
                 logger.info(f"Test query returned keys: {list(test_results.keys())}")
                 if "distances" in test_results:
                     logger.info("✓ Collection test query returned distances")
                 else:
                     logger.warning("✗ Collection test query did NOT return distances")
-                
+
                 return collection
             except Exception as e:
                 logger.error(f"Collection test query failed: {e}")
                 return None
         return None
-        
+
     def _format_results_text(self, papers):
         """Format the results as a plain-text table for CLI output."""
         if not papers:
