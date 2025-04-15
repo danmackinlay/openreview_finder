@@ -126,54 +126,18 @@ def join_list_values(metadata):
     return sanitized
 
 
-# ===================
-# Simple Disk Cache Using shelve
-# ===================
-try:
-    import diskcache
-except ImportError:
-    diskcache = None
+
+def compress_data(obj):
+    """Serialize and compress an object."""
+    pickled = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+    return zlib.compress(pickled, level=9)
 
 
-class DiskCache:
-    """
-    A lightweight disk cache that uses diskcache if available.
-    Falls back to shelve otherwise.
-    """
+def decompress_data(data):
+    """Decompress and deserialize an object."""
+    decompressed = zlib.decompress(data)
+    return pickle.loads(decompressed)
 
-    def __init__(self, cache_file):
-        self.cache_file = cache_file
-        if diskcache is not None:
-            self.cache = diskcache.Cache(cache_file)
-        else:
-            self.cache = None  # will use shelve fallback
-
-    def get(self, key):
-        if self.cache is not None:
-            return self.cache.get(key, default=None)
-        else:
-            import shelve
-
-            with shelve.open(self.cache_file) as db:
-                return db.get(key, None)
-
-    def set(self, key, value):
-        if self.cache is not None:
-            self.cache.set(key, value)
-        else:
-            import shelve
-
-            with shelve.open(self.cache_file, writeback=True) as db:
-                db[key] = value
-
-    def clear(self):
-        if self.cache is not None:
-            self.cache.clear()
-        else:
-            import os
-
-            if os.path.exists(self.cache_file):
-                os.remove(self.cache_file)
 
 def determine_publication_status(invitations):
     """
@@ -240,10 +204,14 @@ class CachedOpenReviewClient:
     """
 
     def __init__(
-        self, baseurl="https://api2.openreview.net", cache_file=API_CACHE_FILE
+        self, baseurl="https://api2.openreview.net",
+        cache_file=API_CACHE_FILE
     ):
         self.client = with_retry(api.OpenReviewClient)(baseurl=baseurl)
-        self.cache = DiskCache(cache_file)
+        self.cache = diskcache.Cache(
+            cache_file,
+            # serializer=(compress_data, decompress_data)
+        )
 
     def get_notes(self, **kwargs):
         key = f"get_notes-{json.dumps(kwargs, sort_keys=True)}"
