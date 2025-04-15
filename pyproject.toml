@@ -17,6 +17,7 @@ dependencies = [
     "tabulate>=0.8.0",
     "peft>=0.15.1",
     "adapters>=1.1.1",
+    "diskcache>=5.6.3",
 ]
 
 [project.scripts]
