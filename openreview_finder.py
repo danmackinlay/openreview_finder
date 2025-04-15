@@ -503,6 +503,93 @@ class OpenReviewFinder:
                 tablefmt="fancy_grid",
             )
 
+    def search_web(self, query, n_results=10, category=None, author=None, keyword=None):
+        """
+        Search the ChromaDB index and display results in a web page.
+        """
+        import webbrowser
+        import tempfile
+        import os
+
+        # Use your existing search logic, but get full results
+        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        try:
+            # Need to specify the embedding function here to avoid downloading default model
+            embedding_function = SPECTER2Embedder()
+            collection = chroma_client.get_collection(
+                name=COLLECTION_NAME, embedding_function=embedding_function
+            )
+        except Exception as e:
+            logger.error(f"Error accessing ChromaDB collection: {e}")
+            return "Index not built. Run 'openreview_finder index' to build the index."
+
+        # Build filtering criteria
+        where_filter = {}
+        if category:
+            where_filter["category"] = {"$eq": category}
+
+        query_args = dict(
+            query_texts=[query],
+            n_results=(n_results * 3 if (author or keyword) else n_results),
+            include=["metadatas", "documents"],  # Make sure to get the full abstracts
+        )
+        if where_filter:
+            query_args["where"] = where_filter
+
+        results = collection.query(**query_args)
+
+        if not results["ids"][0]:
+            return "No matching papers found."
+
+        matched_papers = []
+        for idx, paper_id in enumerate(results["ids"][0]):
+            metadata = results["metadatas"][0][idx]
+
+            # Apply additional filters
+            if author:
+                auth_filter = [a.lower() for a in author]
+                if not any(
+                    auth in " ".join(metadata["authors"]).lower() for auth in auth_filter
+                ):
+                    continue
+            if keyword:
+                kw_filter = [k.lower() for k in keyword]
+                if not any(
+                    kw in " ".join(metadata["keywords"]).lower() for kw in kw_filter
+                ):
+                    continue
+
+            paper = {
+                "id": paper_id,
+                "title": metadata["title"],
+                "authors": metadata["authors"],
+                "abstract": metadata.get("abstract", ""),
+                "category": metadata["category"],
+                "keywords": metadata.get("keywords", ""),
+                "pdf_url": metadata["pdf_url"],
+                "forum_url": metadata["forum_url"],
+                "similarity": results["distances"][0][idx]
+                if "distances" in results
+                else None,
+            }
+            matched_papers.append(paper)
+            if len(matched_papers) >= n_results:
+                break
+
+        # Generate an HTML file
+        html_content = self._generate_results_html(query, matched_papers)
+
+        # Create a temporary HTML file
+        fd, path = tempfile.mkstemp(suffix=".html")
+        with os.fdopen(fd, "w") as f:
+            f.write(html_content)
+
+        # Open the HTML file in the default browser
+        logger.info(f"Opening search results in browser: {path}")
+        webbrowser.open("file://" + path)
+
+        return f"Displaying {len(matched_papers)} results in your web browser."
+
 
 # ===================
 # CLI Commands
@@ -568,6 +655,210 @@ def search(query, num_results, category, author, keyword, format, output):
     else:
         click.echo(results)
 
+@cli.command()
+@click.argument("query")
+@click.option("--num-results", "-n", default=10, help="Number of results to return")
+@click.option(
+    "--category",
+    "-c",
+    type=click.Choice(["oral", "spotlight", "poster"]),
+    help="Filter by paper category",
+)
+@click.option(
+    "--author", "-a", multiple=True, help="Filter by author name (multiple allowed)"
+)
+@click.option(
+    "--keyword", "-k", multiple=True, help="Filter by keyword (multiple allowed)"
+)
+def web(query, num_results, category, author, keyword):
+    """Search for papers and display results in a web browser."""
+    finder = OpenReviewFinder()
+    results = finder.search_web(
+        query,
+        n_results=num_results,
+        category=category,
+        author=author,
+        keyword=keyword,
+    )
+    # Results will be automatically opened in browser by the search_web method
+
 
 if __name__ == "__main__":
     cli()
+
+
+def _generate_results_html(self, query, papers):
+    """
+    Generate an HTML page with search results.
+    """
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ICLR 2025 Search Results: {query}</title>
+    <style>
+        body {{
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+        }}
+        h1 {{
+            color: #2c3e50;
+            border-bottom: 2px solid #ecf0f1;
+            padding-bottom: 10px;
+        }}
+        .search-info {{
+            background-color: #f8f9fa;
+            padding: 10px 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }}
+        .paper {{
+            margin-bottom: 30px;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }}
+        .paper:hover {{
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }}
+        .title {{
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 10px;
+            color: #3498db;
+        }}
+        .authors {{
+            color: #7f8c8d;
+            margin-bottom: 10px;
+        }}
+        .abstract {{
+            margin-bottom: 15px;
+            line-height: 1.8;
+        }}
+        .metadata {{
+            display: flex;
+            gap: 15px;
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+        }}
+        .score {{
+            padding: 3px 8px;
+            background-color: #e67e22;
+            color: white;
+            border-radius: 3px;
+            font-size: 12px;
+        }}
+        .category {{
+            padding: 3px 8px;
+            background-color: #3498db;
+            color: white;
+            border-radius: 3px;
+            font-size: 12px;
+        }}
+        .keywords {{
+            margin-bottom: 15px;
+        }}
+        .keyword {{
+            display: inline-block;
+            padding: 3px 8px;
+            background-color: #ecf0f1;
+            color: #7f8c8d;
+            border-radius: 3px;
+            margin-right: 5px;
+            margin-bottom: 5px;
+            font-size: 12px;
+        }}
+        .links {{
+            display: flex;
+            gap: 10px;
+        }}
+        .links a {{
+            display: inline-block;
+            padding: 8px 12px;
+            background-color: #2ecc71;
+            color: white;
+            text-decoration: none;
+            border-radius: 3px;
+            font-size: 14px;
+        }}
+        .links a:hover {{
+            background-color: #27ae60;
+        }}
+        .no-results {{
+            padding: 30px;
+            text-align: center;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }}
+    </style>
+</head>
+<body>
+    <h1>ICLR 2025 Paper Search Results</h1>
+    <div class="search-info">
+        <p><strong>Query:</strong> {query}</p>
+        <p><strong>Results:</strong> {len(papers)} papers</p>
+    </div>
+
+    <div class="results">
+"""
+
+    if not papers:
+        html += '<div class="no-results">No matching papers found.</div>'
+    else:
+        for paper in papers:
+            # Prepare score display
+            score_display = (
+                f'<span class="score">Score: {paper["similarity"]:.4f}</span>'
+                if paper["similarity"] is not None
+                else ""
+            )
+
+            # Prepare keywords display
+            keywords_html = ""
+            if paper["keywords"]:
+                keywords = (
+                    paper["keywords"].split(", ")
+                    if isinstance(paper["keywords"], str)
+                    else paper["keywords"]
+                )
+                keywords_html = (
+                    '<div class="keywords">'
+                    + "".join([f'<span class="keyword">{k}</span>' for k in keywords])
+                    + "</div>"
+                )
+
+            # Format authors properly
+            authors_display = paper["authors"]
+            if isinstance(authors_display, str):
+                authors_display = authors_display.split(", ")
+
+            html += f"""
+        <div class="paper">
+            <div class="title">{paper["title"]}</div>
+            <div class="authors">{", ".join(authors_display)}</div>
+            <div class="metadata">
+                <span class="category">{paper["category"].upper()}</span>
+                {score_display}
+            </div>
+            {keywords_html}
+            <div class="abstract">{paper["abstract"]}</div>
+            <div class="links">
+                <a href="{paper["pdf_url"]}" target="_blank">PDF</a>
+                <a href="{paper["forum_url"]}" target="_blank">Discussion Forum</a>
+            </div>
+        </div>
+            """
+
+    html += """
+    </div>
+</body>
+</html>
+"""
+    return html
