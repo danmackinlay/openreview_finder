@@ -157,63 +157,85 @@ class OpenReviewFinder:
         )
 
     def extract_papers(self):
-        """Extract papers from OpenReview using API2"""
+        """Extract papers from OpenReview using API2 with pagination"""
         client = self.get_client()
 
-        logger.info("Fetching papers from ICLR 2025...")
-        try:
-            # Using the API2 client with the successful invitation parameter
-            papers = client.get_notes(invitation="ICLR.cc/2025/Conference/-/Submission")
-            logger.info(f"Found {len(papers)} papers from ICLR 2025")
+        logger.info(f"Fetching papers from ICLR.cc/2025/Conference...")
+        all_papers = []
+        offset = 0
+        limit = 1000
 
-            for paper in tqdm(papers, desc="Processing papers"):
-                # Skip if already processed
-                if paper.id in self.checkpoint["extracted_papers"]:
-                    continue
+        while True:
+            try:
+                # Get batch of papers with pagination
+                papers = client.get_notes(
+                    invitation="ICLR.cc/2025/Conference/-/Submission",
+                    offset=offset,
+                    limit=limit,
+                )
 
-                # Determine paper category based on decisions if available
-                category = "poster"  # Default category
-                try:
-                    # Get decision notes for this paper
-                    decision_notes = client.get_notes(
-                        invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
-                        forum=paper.id,
-                    )
+                logger.info(f"Retrieved {len(papers)} papers (offset={offset})")
 
-                    if decision_notes:
-                        decision_text = (
-                            decision_notes[0].content.get("decision", "").lower()
+                if not papers:
+                    break  # No more papers to retrieve
+
+                all_papers.extend(papers)
+
+                # Process this batch of papers
+                for paper in tqdm(
+                    papers, desc=f"Processing papers (offset={offset})"
+                ):                # Skip if already processed
+                    if paper.id in self.checkpoint["extracted_papers"]:
+                        continue
+
+                    # Determine paper category based on decisions if available
+                    category = "poster"  # Default category
+                    try:
+                        # Get decision notes for this paper
+                        decision_notes = client.get_notes(
+                            invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
+                            forum=paper.id,
                         )
-                        if "oral" in decision_text:
-                            category = "oral"
-                        elif "spotlight" in decision_text:
-                            category = "spotlight"
-                except Exception as e:
-                    logger.warning(f"Could not get decision for paper {paper.id}: {e}")
 
-                # Process paper data
-                paper_dict = {
-                    "id": paper.id,
-                    "number": paper.number if hasattr(paper, "number") else "",
-                    "title": paper.content.get("title", "[No Title]"),
-                    "abstract": paper.content.get("abstract", ""),
-                    "authors": paper.content.get("authors", []),
-                    "author_emails": self._get_author_emails(paper),
-                    "keywords": paper.content.get("keywords", []),
-                    "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
-                    "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
-                    "category": category,
-                }
+                        if decision_notes:
+                            decision_text = (
+                                decision_notes[0].content.get("decision", "").lower()
+                            )
+                            if "oral" in decision_text:
+                                category = "oral"
+                            elif "spotlight" in decision_text:
+                                category = "spotlight"
+                    except Exception as e:
+                        logger.warning(f"Could not get decision for paper {paper.id}: {e}")
 
-                self.checkpoint["extracted_papers"][paper.id] = paper_dict
+                    # Process paper data
+                    paper_dict = {
+                        "id": paper.id,
+                        "number": paper.number if hasattr(paper, "number") else "",
+                        "title": paper.content.get("title", "[No Title]"),
+                        "abstract": paper.content.get("abstract", ""),
+                        "authors": paper.content.get("authors", []),
+                        "author_emails": self._get_author_emails(paper),
+                        "keywords": paper.content.get("keywords", []),
+                        "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
+                        "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
+                        "category": category,
+                    }
 
-                # Save checkpoint periodically
-                if len(self.checkpoint["extracted_papers"]) % 20 == 0:
-                    self._save_checkpoint()
 
-        except Exception as e:
-            logger.error(f"Error fetching papers: {e}")
-            self._save_checkpoint()  # Save progress before exiting
+                # Save checkpoint after each batch
+                self._save_checkpoint()
+
+                # Prepare for next batch
+                offset += len(papers)
+
+                # If we got fewer papers than the limit, we've reached the end
+                if len(papers) < limit:
+                    break
+
+            except Exception as e:
+                logger.error(f"Error fetching papers: {e}")
+                self._save_checkpoint()  # Save progress before exiting
 
         # Return all papers as a list
         papers = list(self.checkpoint["extracted_papers"].values())
