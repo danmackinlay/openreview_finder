@@ -186,27 +186,32 @@ class OpenReviewFinder:
         )
 
     def extract_papers(self):
-        """Extract papers from OpenReview using API2 with pagination"""
+        """Extract papers from OpenReview using API2 with efficient batch processing"""
         client = self.get_client()
 
         logger.info(f"Fetching papers from ICLR.cc/2025/Conference...")
         all_papers = []
         offset = 0
+        limit = 1000  # Maximum batch size to minimize API calls
+
+        # Create a simple cache for API calls to avoid repeating calls for the same paper
+        decision_cache = {}
 
         while True:
             try:
                 # Use retry wrapper for rate-limited API calls
                 get_notes_with_retry = with_retry(client.get_notes)
 
-                # Get batch of papers with pagination
+                # Get batch of papers with pagination - include directReplies in one call to get decisions
                 papers = get_notes_with_retry(
                     invitation="ICLR.cc/2025/Conference/-/Submission",
-                    details="original,directReplies,tags,revisions",
+                    details="directReplies,original",  # Fetch decisions in the same call
                     offset=offset,
-                    limit=1000,  # Maximize batch size
+                    limit=limit,  # Maximum batch size
                 )
 
-                logger.info(f"Retrieved {len(papers)} papers (offset={offset})")
+                batch_count = len(papers)
+                logger.info(f"Retrieved {batch_count} papers (offset={offset})")
 
                 if not papers:
                     break  # No more papers to retrieve
@@ -223,43 +228,40 @@ class OpenReviewFinder:
                     # Determine paper category based on decisions if available
                     category = "poster"  # Default category
                     try:
-                        # Try to get decision from directReplies first (avoid additional API call)
+                        # Try to get decision from directReplies included in the batch query
+                        # This avoids additional API calls for each paper
                         if (hasattr(paper, "details") and
                             hasattr(paper.details, "directReplies") and
                             paper.details.directReplies):
 
                             # Look through direct replies for decision notes
+                            found_decision = False
                             for reply in paper.details.directReplies:
-                                if hasattr(reply, "invitation") and "Decision" in reply.invitation:
-                                    if hasattr(reply, "content") and "decision" in reply.content:
-                                        decision_text = reply.content["decision"].lower()
-                                        if "oral" in decision_text:
-                                            category = "oral"
-                                        elif "spotlight" in decision_text:
-                                            category = "spotlight"
-                                        break
+                                if (hasattr(reply, "invitation") and "Decision" in reply.invitation and
+                                    hasattr(reply, "content") and "decision" in reply.content):
 
-                        # Only make a separate API call for decisions if we couldn't find it in directReplies
-                        elif hasattr(paper, "number") and paper.number:
-                            # Use our retry wrapper for rate-limited API calls
-                            get_notes_with_retry = with_retry(client.get_notes)
+                                    decision_text = reply.content["decision"].lower()
+                                    # Cache the decision in case we need it again
+                                    decision_cache[paper.id] = decision_text
 
-                            # Get decision notes for this paper
-                            decision_notes = get_notes_with_retry(
-                                invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
-                                forum=paper.id,
-                            )
+                                    if "oral" in decision_text:
+                                        category = "oral"
+                                    elif "spotlight" in decision_text:
+                                        category = "spotlight"
 
-                            if decision_notes:
-                                decision_text = (
-                                    decision_notes[0].content.get("decision", "").lower()
-                                )
+                                    found_decision = True
+                                    break
+
+                            # If decision wasn't in directReplies, check if we've cached it
+                            if not found_decision and paper.id in decision_cache:
+                                decision_text = decision_cache[paper.id]
                                 if "oral" in decision_text:
                                     category = "oral"
                                 elif "spotlight" in decision_text:
                                     category = "spotlight"
+
                     except Exception as e:
-                        logger.warning(f"Could not get decision for paper {paper.id}: {e}")
+                        logger.warning(f"Error determining category for paper {paper.id}: {e}")
 
                     # Process paper data
                     paper_dict = {
