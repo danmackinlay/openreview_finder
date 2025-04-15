@@ -33,9 +33,9 @@ os.makedirs(CHROMA_DB_PATH, exist_ok=True)
 os.makedirs(os.path.dirname(CHECKPOINT_FILE), exist_ok=True)
 
 
-# Simplified retry function
-def with_retry(func, max_attempts=3):
-    """Simple retry decorator with fixed backoff"""
+# Enhanced retry function with rate limiting awareness
+def with_retry(func, max_attempts=5):
+    """Retry decorator with adaptive backoff for rate limits"""
 
     def wrapper(*args, **kwargs):
         attempts = 0
@@ -47,10 +47,34 @@ def with_retry(func, max_attempts=3):
             except Exception as e:
                 attempts += 1
                 last_error = e
-                wait_time = 2**attempts  # Simple exponential backoff
-                logger.warning(
-                    f"Attempt {attempts} failed: {e}. Retrying in {wait_time}s..."
-                )
+                
+                # Default exponential backoff
+                wait_time = 2**attempts
+                
+                # Check if this is a rate limit error (response code 429)
+                rate_limited = False
+                
+                # Try to extract rate limit information
+                if hasattr(e, 'status_code') and e.status_code == 429:
+                    rate_limited = True
+                elif str(e).find('429') >= 0 or str(e).lower().find('rate limit') >= 0:
+                    rate_limited = True
+                
+                # Try to parse wait time from error message
+                if rate_limited:
+                    import re
+                    wait_match = re.search(r'try again in (\d+) seconds', str(e).lower())
+                    if wait_match:
+                        wait_time = int(wait_match.group(1)) + 1  # Add buffer
+                    else:
+                        wait_time = 30  # Default wait for rate limits
+                        
+                    logger.warning(f"Rate limit hit. Waiting for {wait_time}s before retrying...")
+                else:
+                    logger.warning(
+                        f"Attempt {attempts} failed: {e}. Retrying in {wait_time}s..."
+                    )
+                    
                 time.sleep(wait_time)
 
         logger.error(f"All {max_attempts} attempts failed. Last error: {last_error}")
@@ -167,11 +191,15 @@ class OpenReviewFinder:
 
         while True:
             try:
+                # Use retry wrapper for rate-limited API calls
+                get_notes_with_retry = with_retry(client.get_notes)
+                
                 # Get batch of papers with pagination
-                papers = client.get_notes(
+                papers = get_notes_with_retry(
                     invitation="ICLR.cc/2025/Conference/-/Submission",
+                    details="original,directReplies",  # Request essential details
                     offset=offset,
-                    limit=limit,
+                    limit=limit
                 )
 
                 logger.info(f"Retrieved {len(papers)} papers (offset={offset})")
@@ -221,6 +249,8 @@ class OpenReviewFinder:
                         "forum_url": f"https://openreview.net/forum?id={paper.forum if hasattr(paper, 'forum') else paper.id}",
                         "category": category,
                     }
+                    self.checkpoint["extracted_papers"][paper.id] = paper_dict
+
 
 
                 # Save checkpoint after each batch
@@ -242,24 +272,39 @@ class OpenReviewFinder:
         logger.info(f"Extracted {len(papers)} papers from ICLR 2025")
         return papers
 
-
     def _get_author_emails(self, paper):
-        """Helper function to extract author emails"""
+        """Extract author emails using API2 structure"""
         author_emails = []
+
         try:
-            # Try to get author information from API2
-            if hasattr(paper, "details") and hasattr(paper.details, "authors"):
-                for author in paper.details.authors:
-                    if hasattr(author, "emails"):
-                        author_emails.extend(author.emails)
-            else:
-                # Try alternative approach for API2
-                client = self.get_client()
-                author_group = client.get_group(
-                    f"ICLR.cc/2025/Conference/Paper{paper.number}/Authors"
-                )
-                if hasattr(author_group, "members"):
-                    author_emails = author_group.members
+            # Method 1: Try to get from details.original
+            if hasattr(paper, "details") and hasattr(paper.details, "original"):
+                if (
+                    hasattr(paper.details.original, "content")
+                    and "authorids" in paper.details.original.content
+                ):
+                    # Author IDs are often email addresses
+                    author_emails = paper.details.original.content.get("authorids", [])
+
+            # Method 2: Try to get from details.original.authors
+            if (
+                not author_emails
+                and hasattr(paper, "details")
+                and "original" in paper.details
+            ):
+                if "authors" in paper.details.original:
+                    for author in paper.details.original.authors:
+                        if hasattr(author, "emails"):
+                            author_emails.extend(author.emails)
+
+            # Method 3: Get from content directly (sometimes available)
+            if (
+                not author_emails
+                and hasattr(paper, "content")
+                and "authorids" in paper.content
+            ):
+                author_emails = paper.content.get("authorids", [])
+
         except Exception as e:
             logger.warning(f"Could not retrieve emails for paper {paper.id}: {e}")
 
