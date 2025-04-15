@@ -201,6 +201,9 @@ class SPECTER2Embedder:
                 norms = np.linalg.norm(batch_emb, axis=1, keepdims=True)
                 batch_emb = batch_emb / norms
                 all_embeddings.extend(batch_emb.tolist())
+        logger.info(
+            f"Produced embeddings of shape: {len(all_embeddings)} x {len(all_embeddings[0]) if all_embeddings else 0}"
+        )
         return all_embeddings
 
 
@@ -365,12 +368,12 @@ class OpenReviewFinder:
             CachedOpenReviewClient().cache.clear()
 
         papers = self.extract_papers()
-        client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
 
         try:
-            collection = client.get_collection(COLLECTION_NAME)
+            collection = chroma_client.get_collection(COLLECTION_NAME)
             if force or collection.count() < len(papers):
-                client.delete_collection(COLLECTION_NAME)
+                chroma_client.delete_collection(COLLECTION_NAME)
                 logger.info("Deleted existing collection; rebuilding index.")
                 collection = None
         except Exception:
@@ -378,7 +381,7 @@ class OpenReviewFinder:
 
         if not collection:
             embedding_function = SPECTER2Embedder()
-            collection = client.create_collection(
+            collection = chroma_client.create_collection(
                 name=COLLECTION_NAME,
                 embedding_function=embedding_function,
                 metadata={"description": "ICLR 2025 papers with SPECTER2 embeddings"},
@@ -411,21 +414,27 @@ class OpenReviewFinder:
         """
         Search the ChromaDB index with optional filtering.
         """
-        client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         try:
-            collection = client.get_collection(COLLECTION_NAME)
+            collection = chroma_client.get_collection(COLLECTION_NAME)
         except Exception as e:
             logger.error(f"Error accessing ChromaDB collection: {e}")
             return "Index not built. Run 'openreview_finder index' to build the index."
 
+        # Build filtering criteria.
         where_filter = {}
         if category:
             where_filter["category"] = {"$eq": category}
 
-        n_query = n_results * 3 if (author or keyword) else n_results
-        results = collection.query(
-            query_texts=[query], n_results=n_query, where=where_filter
+        # If no filter is provided, don't pass the where clause at all.
+        query_args = dict(
+            query_texts=[query],
+            n_results=(n_results * 3 if (author or keyword) else n_results),
         )
+        if where_filter:
+            query_args["where"] = where_filter
+
+        results = collection.query(**query_args)
 
         if not results["ids"][0]:
             return "No matching papers found."
@@ -449,7 +458,7 @@ class OpenReviewFinder:
                 "title": metadata["title"],
                 "authors": metadata["authors"],
                 "category": metadata["category"],
-                "keywords": metadata.get("keywords", []),
+                "keywords": metadata.get("keywords", ""),
                 "pdf_url": metadata["pdf_url"],
                 "forum_url": metadata["forum_url"],
                 "similarity": results["distances"][0][idx]
