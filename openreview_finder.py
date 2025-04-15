@@ -50,37 +50,64 @@ def with_retry(func, max_attempts=3):
     return wrapper
 
 class SPECTER2Embedder:
-    """SPECTER2 embedding function for academic papers using SentenceTransformers"""
+    """Embedding function with multiple fallback options"""
 
     def __init__(self, model_name="allenai/specter2"):
-        logger.info(f"Loading SPECTER2 model: {model_name}")
-        try:
-            # Load model using SentenceTransformers
-            self.model = SentenceTransformer(model_name)
+        logger.info(f"Attempting to load embedding model...")
+
+        # Try different models in order of preference
+        models_to_try = [
+            model_name,             # Try the requested model first
+            "allenai/specter",      # Try original SPECTER if SPECTER2 fails
+            "all-mpnet-base-v2",    # Good general scientific text model
+            "all-MiniLM-L6-v2"      # Lightweight fallback
+        ]
+
+        # Try each model in order until one works
+        model_loaded = False
+        for model in models_to_try:
+            try:
+                logger.info(f"Trying to load model: {model}")
+                self.model = SentenceTransformer(model)
+                self.device = self.model.device
+                logger.info(f"Successfully loaded model: {model}")
+                logger.info(f"Using device: {self.device}")
+                model_loaded = True
+                break
+            except Exception as e:
+                logger.warning(f"Failed to load model {model}: {str(e)}")
+                continue
+
+        if not model_loaded:
+            # Last resort - create a simple averaging model
+            logger.warning("All model loading attempts failed - using basic embedding model")
+            from sentence_transformers import models
+            word_embedding_model = models.Transformer('distilbert-base-uncased')
+            pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension())
+            self.model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
             self.device = self.model.device
-            logger.info(f"Successfully loaded SPECTER2 model using SentenceTransformers")
-            logger.info(f"Using device: {self.device}")
-        except Exception as e:
-            logger.error(f"Error loading SPECTER2 model: {e}")
-            # Fallback to a different model if needed
-            logger.info("Falling back to a general-purpose model...")
-            self.model = SentenceTransformer('all-MiniLM-L6-v2')
-            self.device = self.model.device
-            logger.info(f"Using fallback model on device: {self.device}")
-    
-    def __call__(self, texts):
-        """Generate embeddings for a list of texts"""
+
+    def __call__(self, input):
+        """Generate embeddings for a list of texts
+
+        Args:
+            input: List of strings to embed
+
+        Returns:
+            List of embeddings
+        """
         try:
             # SentenceTransformer handles batching internally
-            embeddings = self.model.encode(texts, normalize_embeddings=True)
+            embeddings = self.model.encode(input, normalize_embeddings=True)
             return embeddings.tolist()  # Convert numpy array to list for ChromaDB
         except Exception as e:
             logger.error(f"Error generating embeddings: {e}")
             # Return zero embeddings as fallback (not ideal but prevents crashes)
-            dimension = 768  # Default embedding dimension
-            return [np.zeros(dimension).tolist() for _ in texts]
+            dimension = 768  # Default embedding dimension for most models
+            return [np.zeros(dimension).tolist() for _ in input]
 
 class OpenReviewFinder:
+
     """Main class handling paper extraction, indexing and search"""
 
     def __init__(self):
@@ -184,7 +211,15 @@ class OpenReviewFinder:
 
     def build_index(self, batch_size=50, force=False):
         """Build search index with ChromaDB and SPECTER2 embeddings"""
-        # First extract papers
+        # First extract papers (reset checkpoint if force is True)
+        if force:
+            logger.info("Force flag set, resetting checkpoint...")
+            self.checkpoint = {
+                'completed_categories': [],
+                'extracted_papers': {}
+            }
+            self._save_checkpoint()
+
         papers = self.extract_papers()
 
         # Setup ChromaDB

@@ -15,6 +15,7 @@ dependencies = [
     "tenacity>=8.0.0",
     "scikit-learn>=1.0.0",
     "tabulate>=0.8.0",
+    "peft>=0.15.1",
 ]
 
 [project.scripts]
