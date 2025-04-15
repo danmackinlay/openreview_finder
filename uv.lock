@@ -28,6 +28,19 @@ wheels = [
 ]
 
 [[package]]
+name = "adapters"
+version = "1.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+    { name = "transformers" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/59/26/213d684578a99c30831551103287037612f923562d507bf5adcc2b4a3225/adapters-1.1.1.tar.gz", hash = "sha256:c41ad6433399c2221e624405f627166008c556cc798de53ef741b78412ef871d", size = 214484 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/7d/b2/e82b0e95996ddf4a6de37daced9000051b3f8a7c85155a29b6ba5ea3d11e/adapters-1.1.1-py3-none-any.whl", hash = "sha256:16228de0506f7992017f24c6b4c375c5dc92886682404bed8ba88940c6c53b80", size = 289320 },
+]
+
+[[package]]
 name = "annotated-types"
 version = "0.7.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1298,6 +1311,7 @@ name = "openreview-finder"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "adapters" },
     { name = "chromadb" },
     { name = "click" },
     { name = "openreview-py" },
@@ -1314,6 +1328,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "adapters", specifier = ">=1.1.1" },
     { name = "chromadb", specifier = ">=0.4.0" },
     { name = "click", specifier = ">=8.0.0" },
     { name = "openreview-py", specifier = ">=1.0.0" },
@@ -2782,7 +2797,7 @@ wheels = [
 
 [[package]]
 name = "transformers"
-version = "4.51.3"
+version = "4.48.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "filelock" },
@@ -2797,9 +2812,9 @@ dependencies = [
     { name = "tokenizers" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f1/11/7414d5bc07690002ce4d7553602107bf969af85144bbd02830f9fb471236/transformers-4.51.3.tar.gz", hash = "sha256:e292fcab3990c6defe6328f0f7d2004283ca81a7a07b2de9a46d67fd81ea1409", size = 8941266 }
+sdist = { url = "https://files.pythonhosted.org/packages/e3/82/cebeb7af5e64440f1638f18c4ed0f89156d0eeaa6290d98da8ca93ac3872/transformers-4.48.3.tar.gz", hash = "sha256:a5e8f1e9a6430aa78215836be70cecd3f872d99eeda300f41ad6cc841724afdb", size = 8373458 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a9/b6/5257d04ae327b44db31f15cce39e6020cc986333c715660b1315a9724d82/transformers-4.51.3-py3-none-any.whl", hash = "sha256:fd3279633ceb2b777013234bbf0b4f5c2d23c4626b05497691f00cfda55e8a83", size = 10383940 },
+    { url = "https://files.pythonhosted.org/packages/b6/1a/efeecb8d83705f2f4beac98d46f2148c95ecd7babfb31b5c0f1e7017e83d/transformers-4.48.3-py3-none-any.whl", hash = "sha256:78697f990f5ef350c23b46bf86d5081ce96b49479ab180b2de7687267de8fd36", size = 9669412 },
 ]
 
 [[package]]
