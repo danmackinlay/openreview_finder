@@ -23,7 +23,7 @@ from adapters import AutoAdapterModel
 # ===================
 CHROMA_DB_PATH = "./chroma_db"
 COLLECTION_NAME = "iclr2025_papers"
-API_CACHE_FILE = "./api_cache.db"
+API_CACHE_FILE = "./api_cache"
 
 # Ensure required directories exist
 os.makedirs(CHROMA_DB_PATH, exist_ok=True)
@@ -82,6 +82,35 @@ def with_retry(func, max_attempts=5):
 
     return wrapper
 
+def clean_field(field):
+    """Ensure that a field is a primitive type.
+    If it's a dict with a 'value' key, return that value.
+    If it's a list, clean each item.
+    """
+    if isinstance(field, dict):
+        return field.get("value", field)
+    elif isinstance(field, list):
+        return [clean_field(item) for item in field]
+    return field
+
+def join_list_values(metadata):
+    """
+    Convert any list values in the metadata dict into a comma-separated string.
+
+    Args:
+        metadata (dict): The metadata dictionary.
+
+    Returns:
+        dict: A new metadata dictionary where any value that was a list is now a string.
+    """
+    sanitized = {}
+    for key, value in metadata.items():
+        if isinstance(value, list):
+            # Join list elements into a comma-separated string.
+            sanitized[key] = ", ".join(map(str, value))
+        else:
+            sanitized[key] = value
+    return sanitized
 
 # ===================
 # Simple Disk Cache Using shelve
@@ -199,7 +228,6 @@ class CachedOpenReviewClient:
             self.cache.set(key, result)
             return result
 
-
 # ===================
 # OpenReview Finder
 # ===================
@@ -256,7 +284,9 @@ class OpenReviewFinder:
                 if not papers:
                     break
 
-                for paper in tqdm(papers, desc=f"Processing offset {offset}"):
+                for i, paper in tqdm(enumerate(papers), desc=f"Processing offset {offset}"):
+                    # if i == 0:  # Print the first note as a sample.
+                    #     print_raw_note(paper)
                     if paper.id in papers_dict:
                         continue
 
@@ -292,19 +322,23 @@ class OpenReviewFinder:
                                 category = "oral"
                             elif "spotlight" in decision_text:
                                 category = "spotlight"
-
                     paper_data = {
                         "id": paper.id,
                         "number": paper.number if hasattr(paper, "number") else "",
-                        "title": paper.content.get("title", "[No Title]"),
-                        "abstract": paper.content.get("abstract", ""),
-                        "authors": [a.lower() for a in paper.content.get("authors", [])],
-                        "keywords": [k.lower() for k in paper.content.get("keywords", [])],
+                        "title": clean_field(paper.content.get("title", "[No Title]")),
+                        "abstract": clean_field(paper.content.get("abstract", "")),
+                        "authors": [
+                            a for a in clean_field(paper.content.get("authors", []))
+                        ],
+                        "keywords": [
+                            k.lower() for k in clean_field(paper.content.get("keywords", []))
+                        ],
                         "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
                         "forum_url": f"https://openreview.net/forum?id={getattr(paper, 'forum', paper.id)}",
                         "category": category,
                     }
-                    papers_dict[paper.id] = paper_data
+                    # logger.info(f"Extracted paper data: {paper_data}")
+                    papers_dict[paper.id] = join_list_values(paper_data)
 
                 offset += len(papers)
             except Exception as e:

@@ -176,3 +176,6 @@ cython_debug/
 ## our caches
 openreview-cache
 chroma_db
+api_cache.db
+api_cache/*
+.DS_Store
