@@ -10,6 +10,7 @@ import pandas as pd
 import numpy as np
 from tqdm.auto import tqdm
 from tabulate import tabulate
+from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
 
 # OpenReview, chromadb, transformers, adapters
 from openreview import api
@@ -36,6 +37,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(), logging.FileHandler("openreview_finder.log")],
 )
 logger = logging.getLogger(__name__)
+logging.getLogger("chromadb").setLevel(logging.DEBUG)
 
 
 # ===================
@@ -167,7 +169,7 @@ class DiskCache:
 # ===================
 # SPECTER2 Embedder
 # ===================
-class SPECTER2Embedder:
+class SPECTER2Embedder(EmbeddingFunction):
     """SPECTER2 embedder using the adapters library."""
 
     def __init__(self):
@@ -182,7 +184,7 @@ class SPECTER2Embedder:
         self.model = self.model.to(self.device)
         logger.info(f"SPECTER2 model running on {self.device}")
 
-    def __call__(self, input):
+    def __call__(self, input: Documents) -> Embeddings:
         batch_size = 8
         all_embeddings = []
         for i in range(0, len(input), batch_size):
@@ -411,17 +413,17 @@ class OpenReviewFinder:
         keyword=None,
         output_format="text",
     ):
-        """
-        Search the ChromaDB index with optional filtering.
-        """
         chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         try:
-            collection = chroma_client.get_collection(COLLECTION_NAME)
+            # Create the embedding function and pass it when getting the collection
+            embedding_function = SPECTER2Embedder()
+            collection = chroma_client.get_collection(
+                name=COLLECTION_NAME, embedding_function=embedding_function
+            )
         except Exception as e:
             logger.error(f"Error accessing ChromaDB collection: {e}")
             return "Index not built. Run 'openreview_finder index' to build the index."
-
-        # Build filtering criteria.
+          # Build filtering criteria.
         where_filter = {}
         if category:
             where_filter["category"] = {"$eq": category}
