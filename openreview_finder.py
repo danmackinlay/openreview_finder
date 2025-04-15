@@ -212,11 +212,38 @@ class OpenReviewFinder:
     def __init__(self):
         self.api_client = CachedOpenReviewClient()
 
+    def fetch_all_decision_notes(self, limit=1000):
+        """Fetch all decision notes in batches and return as a list."""
+        all_decision_notes = []
+        offset = 0
+        while True:
+            batch = self.api_client.get_notes(
+                invitation="ICLR.cc/2025/Conference/-/Decision",
+                offset=offset,
+                limit=limit,
+            )
+            if not batch:
+                break
+            all_decision_notes.extend(batch)
+            offset += len(batch)
+        return all_decision_notes
+
     def extract_papers(self):
         logger.info("Fetching papers from ICLR 2025 conference...")
         papers_dict = {}
         offset = 0
 
+        # Fetch all decision notes in batches
+        logger.info("Fetching all decision notes in paginated batches...")
+        decision_notes_bulk = self.fetch_all_decision_notes(limit=1000)
+        # Build mapping from forum id (or paper id) to decision text
+        decision_mapping = {}
+        for note in decision_notes_bulk:
+            decision_text = note.content.get("decision", "").lower()
+            # Using forum (or another unique identifier) as key
+            decision_mapping[note.forum] = decision_text
+
+        # Fetch submission papers in batches
         while True:
             try:
                 papers = self.api_client.get_notes(
@@ -233,19 +260,20 @@ class OpenReviewFinder:
                     if paper.id in papers_dict:
                         continue
 
-                    # Default category and case normalization for consistency.
+                    # Default category is 'poster'
                     category = "poster"
-                    try:
-                        decision_found = False
-                        if getattr(paper, "details", None) and getattr(
-                            paper.details, "directReplies", None
-                        ):
-                            for reply in paper.details.directReplies:
-                                if (
-                                    hasattr(reply, "invitation")
-                                    and "Decision" in reply.invitation
-                                    and "decision" in reply.content
-                                ):
+                    decision_found = False
+
+                    # First, try to get decision from directReplies if available
+                    if getattr(paper, "details", None) and getattr(
+                        paper.details, "directReplies", None
+                    ):
+                        for reply in paper.details.directReplies:
+                            if (
+                                hasattr(reply, "invitation")
+                                and "Decision" in reply.invitation
+                            ):
+                                if "decision" in reply.content:
                                     decision_text = reply.content["decision"].lower()
                                     if "oral" in decision_text:
                                         category = "oral"
@@ -255,41 +283,23 @@ class OpenReviewFinder:
                                         decision_found = True
                                     if decision_found:
                                         break
-                        if (
-                            not decision_found
-                            and hasattr(paper, "number")
-                            and paper.number
-                        ):
-                            decision_notes = self.api_client.get_notes(
-                                invitation=f"ICLR.cc/2025/Conference/Paper{paper.number}/-/Decision",
-                                forum=paper.id,
-                            )
-                            if decision_notes:
-                                decision_text = (
-                                    decision_notes[0]
-                                    .content.get("decision", "")
-                                    .lower()
-                                )
-                                if "oral" in decision_text:
-                                    category = "oral"
-                                elif "spotlight" in decision_text:
-                                    category = "spotlight"
-                    except Exception as e:
-                        logger.warning(
-                            f"Error fetching decision info for paper {paper.id}: {e}"
-                        )
+
+                    # If not found in directReplies, check the bulk decision mapping.
+                    if not decision_found:
+                        decision_text = decision_mapping.get(paper.id, "")
+                        if decision_text:
+                            if "oral" in decision_text:
+                                category = "oral"
+                            elif "spotlight" in decision_text:
+                                category = "spotlight"
 
                     paper_data = {
                         "id": paper.id,
                         "number": paper.number if hasattr(paper, "number") else "",
                         "title": paper.content.get("title", "[No Title]"),
                         "abstract": paper.content.get("abstract", ""),
-                        "authors": [
-                            a.lower() for a in paper.content.get("authors", [])
-                        ],
-                        "keywords": [
-                            k.lower() for k in paper.content.get("keywords", [])
-                        ],
+                        "authors": [a.lower() for a in paper.content.get("authors", [])],
+                        "keywords": [k.lower() for k in paper.content.get("keywords", [])],
                         "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
                         "forum_url": f"https://openreview.net/forum?id={getattr(paper, 'forum', paper.id)}",
                         "category": category,
