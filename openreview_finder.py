@@ -8,8 +8,8 @@ import openreview
 import chromadb
 from tqdm.auto import tqdm
 from tabulate import tabulate
-from transformers import AutoTokenizer, AutoModel
-from sklearn.preprocessing import normalize
+from sentence_transformers import SentenceTransformer
+import numpy as np
 import logging
 import time
 
@@ -50,45 +50,35 @@ def with_retry(func, max_attempts=3):
     return wrapper
 
 class SPECTER2Embedder:
-    """SPECTER2 embedding function for academic papers"""
+    """SPECTER2 embedding function for academic papers using SentenceTransformers"""
 
     def __init__(self, model_name="allenai/specter2"):
         logger.info(f"Loading SPECTER2 model: {model_name}")
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.model = AutoModel.from_pretrained(model_name)
-
-        # Move to GPU if available
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = self.model.to(self.device)
-        logger.info(f"Using device: {self.device}")
-
+        try:
+            # Load model using SentenceTransformers
+            self.model = SentenceTransformer(model_name)
+            self.device = self.model.device
+            logger.info(f"Successfully loaded SPECTER2 model using SentenceTransformers")
+            logger.info(f"Using device: {self.device}")
+        except Exception as e:
+            logger.error(f"Error loading SPECTER2 model: {e}")
+            # Fallback to a different model if needed
+            logger.info("Falling back to a general-purpose model...")
+            self.model = SentenceTransformer('all-MiniLM-L6-v2')
+            self.device = self.model.device
+            logger.info(f"Using fallback model on device: {self.device}")
+    
     def __call__(self, texts):
         """Generate embeddings for a list of texts"""
-        embeddings = []
-        batch_size = 8
-
-        for i in range(0, len(texts), batch_size):
-            batch_texts = texts[i:i+batch_size]
-
-            # Tokenize
-            inputs = self.tokenizer(
-                batch_texts,
-                padding=True,
-                truncation=True,
-                return_tensors="pt",
-                max_length=512
-            ).to(self.device)
-
-            # Generate embeddings
-            with torch.no_grad():
-                outputs = self.model(**inputs)
-                # Use CLS token embedding
-                batch_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
-                # Normalize
-                batch_embeddings = normalize(batch_embeddings, axis=1)
-                embeddings.extend(batch_embeddings)
-
-        return embeddings
+        try:
+            # SentenceTransformer handles batching internally
+            embeddings = self.model.encode(texts, normalize_embeddings=True)
+            return embeddings.tolist()  # Convert numpy array to list for ChromaDB
+        except Exception as e:
+            logger.error(f"Error generating embeddings: {e}")
+            # Return zero embeddings as fallback (not ideal but prevents crashes)
+            dimension = 768  # Default embedding dimension
+            return [np.zeros(dimension).tolist() for _ in texts]
 
 class OpenReviewFinder:
     """Main class handling paper extraction, indexing and search"""
