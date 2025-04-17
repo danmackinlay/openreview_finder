@@ -27,3 +27,67 @@ Citations:
 [6] https://github.com/chroma-core/chroma/issues/1488
 [7] https://docs.trychroma.com/docs/querying-collections/query-and-get
 [8] https://gist.github.com/pgolding/571aa64072d4c3d9304ee034cdcc7487
+
+
+The full-text search performed by the `where_document` clause (specifically using `$contains`) in ChromaDB is **typically case-insensitive by default**.
+
+Here's why and what that means:
+
+1.  **Underlying Mechanism (SQLite FTS5):** ChromaDB leverages SQLite's FTS5 extension for the `where_document` functionality. Standard FTS5 tokenizers (like the default `unicode61`) perform normalization steps during indexing and querying. A key part of this normalization is **case-folding**, usually converting text to lowercase.
+2.  **Effect:** Because both the indexed document text and the query term within `$contains` are typically converted to lowercase (or another normalized form) before comparison, the match becomes case-insensitive.
+3.  **Result:** Searching for `{"$contains": "story"}` should match documents containing "story", "Story", "STORY", etc.
+
+**Example Confirmation:**
+
+Using the previous example:
+
+```python
+import chromadb
+
+# Setup client and collection
+client = chromadb.Client()
+collection_name = "case_insensitive_example"
+if collection_name in [c.name for c in client.list_collections()]:
+    client.delete_collection(name=collection_name)
+collection = client.get_or_create_collection(name=collection_name)
+
+# Add documents with varying cases
+collection.add(
+    documents=[
+        "This document contains the word Story.",
+        "This one has STORY in uppercase.",
+        "And this uses lowercase story.",
+        "This document is about tales." # Should not match
+    ],
+    ids=["id1", "id2", "id3", "id4"]
+)
+
+# Query using lowercase
+results = collection.query(
+    query_texts=["narrative"], # Query text for semantic similarity (less relevant here)
+    n_results=4,
+    where_document={"$contains": "story"} # Case-insensitive search for 'story'
+)
+
+print("IDs found:", results['ids'])
+
+# Query using uppercase
+results_upper = collection.query(
+    query_texts=["narrative"],
+    n_results=4,
+    where_document={"$contains": "STORY"} # Also case-insensitive
+)
+print("IDs found (uppercase query):", results_upper['ids'])
+```
+
+**Expected Output:**
+
+Both queries should return the IDs of the documents containing "story" regardless of its original case:
+
+```
+IDs found: [['id1', 'id2', 'id3']]
+IDs found (uppercase query): [['id1', 'id2', 'id3']]
+```
+*(The exact order within the inner list might vary based on distance scores, but all three relevant IDs should be present).*
+
+**In summary:** You generally don't need to do anything extra to achieve case-insensitivity with `where_document={"$contains": "..."}`; it's the standard behavior due to the underlying FTS5 implementation used by ChromaDB.

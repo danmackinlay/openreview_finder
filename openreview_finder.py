@@ -424,16 +424,54 @@ class OpenReviewFinder:
             )
             return []
 
-        # Initialize empty filter
-        where_filter = {}
-
+        # Initialize filters
+        where_document = None
+        
+        # Add author filter if provided
+        if authors:
+            # Create a filter for authors
+            author_filters = []
+            for auth in authors:
+                author_filters.append({"$contains": auth})
+            
+            # If multiple authors, use $or to check for any
+            if len(author_filters) > 1:
+                author_filter = {"$or": author_filters}
+            else:
+                author_filter = author_filters[0]
+            
+            where_document = author_filter
+        
+        # Add keyword filter if provided
+        if keywords:
+            # Create a filter for keywords
+            keyword_filters = []
+            for kw in keywords:
+                keyword_filters.append({"$contains": kw})
+            
+            # If multiple keywords, use $or to check for any
+            if len(keyword_filters) > 1:
+                keyword_filter = {"$or": keyword_filters}
+            else:
+                keyword_filter = keyword_filters[0]
+            
+            # If we already have an author filter, combine with $and
+            if where_document:
+                where_document = {"$and": [where_document, keyword_filter]}
+            else:
+                where_document = keyword_filter
+        
+        # Build query arguments
         query_args = dict(
             query_texts=[query],
-            n_results=(num_results * 3 if (authors or keywords) else num_results),
+            n_results=num_results,
             include=["metadatas", "documents", "distances", "embeddings"],
         )
-        if where_filter:
-            query_args["where"] = where_filter
+        
+        # Add document filters if any
+        if where_document:
+            query_args["where_document"] = where_document
+            logger.info(f"Using document filters: {where_document}")
 
         logger.info(f"Executing query with args: {query_args}")
         results = collection.query(**query_args)
@@ -468,28 +506,10 @@ class OpenReviewFinder:
             logger.warning("No results returned from ChromaDB")
             return []
 
-        # Process results and apply additional filters
+        # Process results - no need for additional filtering as ChromaDB does it for us
         matched_papers = []
         for idx, paper_id in enumerate(results["ids"][0]):
             metadata = results["metadatas"][0][idx]
-            # Additional filtering for authors and keywords
-            authors_text = metadata["authors"]
-            if isinstance(authors_text, list):
-                authors_text = " ".join(authors_text)
-
-            if authors and not any(
-                auth.lower() in authors_text.lower() for auth in authors
-            ):
-                continue
-
-            keywords_text = metadata.get("keywords", "")
-            if isinstance(keywords_text, list):
-                keywords_text = " ".join(keywords_text)
-
-            if keywords and not any(
-                kw.lower() in keywords_text.lower() for kw in keywords
-            ):
-                continue
             paper = {
                 "id": paper_id,
                 "title": metadata["title"],
