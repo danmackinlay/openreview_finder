@@ -424,13 +424,22 @@ class OpenReviewFinder:
         for idx, paper_id in enumerate(results["ids"][0]):
             metadata = results["metadatas"][0][idx]
             # Additional filtering for authors and keywords
+            authors_text = metadata["authors"] 
+            if isinstance(authors_text, list):
+                authors_text = " ".join(authors_text)
+                
             if authors and not any(
-                auth.lower() in " ".join(metadata["authors"]).lower()
+                auth.lower() in authors_text.lower()
                 for auth in authors
             ):
                 continue
+                
+            keywords_text = metadata.get("keywords", "")
+            if isinstance(keywords_text, list):
+                keywords_text = " ".join(keywords_text)
+                
             if keywords and not any(
-                kw.lower() in " ".join(metadata["keywords"]).lower() for kw in keywords
+                kw.lower() in keywords_text.lower() for kw in keywords
             ):
                 continue
             paper = {
@@ -525,9 +534,13 @@ def create_gradio_interface(finder):
         )
         papers = finder._query_papers(query, num_results, authors, keywords)
         html_results = finder._format_results_html(papers, query)
-        if history is None:
+        
+        # Initialize history with proper dataframe structure if None
+        if history is None or not isinstance(history, list) or len(history) == 0:
             history = []
-        history.append((query, f"{len(papers)} results"))
+        
+        # Add the new search to history
+        history.append({"Query": query, "Results": f"{len(papers)} results"})
         return html_results, history
 
     with gr.Blocks(title="ICLR 2025 Paper Search") as app:
@@ -556,8 +569,8 @@ def create_gradio_interface(finder):
                     headers=["Query", "Results"],
                     datatype=["str", "str"],
                     row_count=(10, "dynamic"),
-                    col_count=(2, "fixed"),
                     label="Previous Searches",
+                    value=[]  # Initialize with empty list
                 )
         results_display = gr.HTML(label="Results")
         search_button.click(
