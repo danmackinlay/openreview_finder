@@ -494,9 +494,8 @@ class OpenReviewFinder:
             return "No results found."
         table_data = []
         for idx, paper in enumerate(papers):
-            authors_disp = ", ".join(paper["authors"][:3])
-            if len(paper["authors"]) > 3:
-                authors_disp += f" (+{len(paper['authors']) - 3} more)"
+            authors = paper["authors"].split("; ")
+            authors_disp = authors[:3] + ["et al"] if len(authors) > 3 else authors
             score = (
                 f"{paper['similarity']:.4f}"
                 if paper["similarity"] is not None
@@ -535,7 +534,7 @@ class OpenReviewFinder:
             html += f"""
             <div style="margin-bottom: 25px; padding: 15px; border-left: 5px solid {paper_color}; background-color: #f9f9f9;">
                 <h3 style="margin-top: 0; color: #2c3e50;">{i + 1}. {paper["title"]} {score_display}</h3>
-                <p style="color: #7f8c8d;"><b>Authors:</b> {", ".join(paper["authors"])}</p>
+                <p style="color: #7f8c8d;"><b>Authors:</b> {paper["authors"]}</p>
                 <p><b>Abstract:</b> {paper["abstract"]}</p>
                 <p><b>Keywords:</b> {paper["keywords"]}</p>
                 <div>
