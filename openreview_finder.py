@@ -115,7 +115,7 @@ def join_list_values(metadata):
     for key, value in metadata.items():
         if isinstance(value, list):
             # Join list elements into a comma-separated string.
-            sanitized[key] = ", ".join(map(str, value))
+            sanitized[key] = "; ".join(map(str, value))
         else:
             sanitized[key] = value
     return sanitized
@@ -410,13 +410,42 @@ class OpenReviewFinder:
         query_args = dict(
             query_texts=[query],
             n_results=(num_results * 3 if (authors or keywords) else num_results),
-            include=["metadatas", "documents"],
+            include=["metadatas", "documents", "distances", "embeddings"],
         )
         if where_filter:
             query_args["where"] = where_filter
 
+        logger.info(f"Executing query with args: {query_args}")
         results = collection.query(**query_args)
+
+        # Detailed debug information for ChromaDB results
+        logger.info(f"ChromaDB query returned with keys: {list(results.keys())}")
+
+        # Examine each key in detail
+        if "ids" in results:
+            logger.info(f"  - ids shape: {len(results['ids'])}x{len(results['ids'][0]) if results['ids'] else 0}")
+
+        if "distances" in results:
+            if results["distances"]:
+                logger.info(f"  - distances shape: {len(results['distances'])}x{len(results['distances'][0]) if results['distances'][0] else 0}")
+                logger.info(f"  - First few distances: {results['distances'][0][:3] if results['distances'][0] else []}")
+            else:
+                logger.info("  - distances key exists but is empty")
+        else:
+            logger.warning("  - distances key missing from ChromaDB results")
+
+        # Log collection details
+        logger.info(f"Collection details:")
+        logger.info(f"  - Collection name: {COLLECTION_NAME}")
+        logger.info(f"  - Collection path: {CHROMA_DB_PATH}")
+
+        # Print query details in a clean format for debugging
+        logger.info(f"Query text: '{query}'")
+        logger.info(f"Requested results: {num_results}")
+        logger.info(f"Query included: {query_args['include']}")
+
         if not results["ids"][0]:
+            logger.warning("No results returned from ChromaDB")
             return []
 
         # Process results and apply additional filters
@@ -424,20 +453,19 @@ class OpenReviewFinder:
         for idx, paper_id in enumerate(results["ids"][0]):
             metadata = results["metadatas"][0][idx]
             # Additional filtering for authors and keywords
-            authors_text = metadata["authors"] 
+            authors_text = metadata["authors"]
             if isinstance(authors_text, list):
                 authors_text = " ".join(authors_text)
-                
+
             if authors and not any(
-                auth.lower() in authors_text.lower()
-                for auth in authors
+                auth.lower() in authors_text.lower() for auth in authors
             ):
                 continue
-                
+
             keywords_text = metadata.get("keywords", "")
             if isinstance(keywords_text, list):
                 keywords_text = " ".join(keywords_text)
-                
+
             if keywords and not any(
                 kw.lower() in keywords_text.lower() for kw in keywords
             ):
@@ -522,23 +550,22 @@ class OpenReviewFinder:
         """Return a CSV string (using pandas for convenience)."""
         return pd.DataFrame(papers).to_csv(index=False)
 
+
 def create_gradio_interface(finder):
     import gradio as gr
 
-    def search_papers(
-        query, num_results, author_input, keyword_input, history=None
-    ):
+    def search_papers(query, num_results, author_input, keyword_input, history=None):
         authors = [a.strip() for a in author_input.split(",")] if author_input else []
         keywords = (
             [k.strip() for k in keyword_input.split(",")] if keyword_input else []
         )
         papers = finder._query_papers(query, num_results, authors, keywords)
         html_results = finder._format_results_html(papers, query)
-        
+
         # Initialize history with proper dataframe structure if None
         if history is None or not isinstance(history, list) or len(history) == 0:
             history = []
-        
+
         # Add the new search to history
         history.append({"Query": query, "Results": f"{len(papers)} results"})
         return html_results, history
@@ -570,7 +597,7 @@ def create_gradio_interface(finder):
                     datatype=["str", "str"],
                     row_count=(10, "dynamic"),
                     label="Previous Searches",
-                    value=[]  # Initialize with empty list
+                    value=[],  # Initialize with empty list
                 )
         results_display = gr.HTML(label="Results")
         search_button.click(
@@ -629,9 +656,7 @@ def index(force, batch_size):
 @click.option("--output", "-o", help="Path to save output")
 def search(query, num_results, author, keyword, format, output):
     finder = OpenReviewFinder()
-    papers = finder._query_papers(
-        query, num_results, list(author), list(keyword)
-    )
+    papers = finder._query_papers(query, num_results, list(author), list(keyword))
     # Choose the output format using the helper functions.
     if format == "csv":
         results = finder._format_results_csv(papers)
@@ -648,17 +673,15 @@ def search(query, num_results, author, keyword, format, output):
         click.echo(results)
 
 
-
 @cli.command()
 def web():
     """Launch a Gradio web interface for searching and exploring papers."""
     finder = OpenReviewFinder()
     app = create_gradio_interface(finder)
-    import webbrowser, time
+    import webbrowser
 
     webbrowser.open("http://127.0.0.1:7860/", new=2, autoraise=True)
     app.launch()
-
 
 
 if __name__ == "__main__":
