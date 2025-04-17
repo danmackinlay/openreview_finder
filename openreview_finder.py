@@ -4,6 +4,7 @@ A script to extract, index, and search ICLR 2025 papers using OpenReview API and
 This script provides a command-line interface (CLI) for searching papers based on semantic similarity.
 It also includes a Gradio web interface for user-friendly interaction.
 """
+
 import os
 import json
 import time
@@ -337,13 +338,34 @@ class OpenReviewFinder:
         """Load the ChromaDB collection with the SPECTER2 embedder."""
         chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         try:
+            # Use consistent embedding function
             embedding_function = SPECTER2Embedder()
-            collection = chroma_client.get_collection(
-                name=COLLECTION_NAME, embedding_function=embedding_function
-            )
-            return collection
+
+            # First try to get the existing collection
+            try:
+                logger.info(f"Attempting to load collection: {COLLECTION_NAME}")
+                collection = chroma_client.get_collection(
+                    name=COLLECTION_NAME, embedding_function=embedding_function
+                )
+                logger.info(f"Successfully loaded collection with {collection.count()} documents")
+                # Test the collection to make sure it's configured correctly
+                return self._check_collection(collection)
+            except Exception as e:
+                logger.warning(f"Could not load existing collection: {e}")
+
+                # If collection doesn't exist, create it
+                logger.info(f"Creating new collection: {COLLECTION_NAME}")
+                collection = chroma_client.create_collection(
+                    name=COLLECTION_NAME,
+                    embedding_function=embedding_function,
+                    metadata={"description": "ICLR 2025 papers with SPECTER2 embeddings"}
+                )
+                logger.info("New collection created. Please run indexing.")
+                # Test the new collection to make sure it's configured correctly
+                return self._check_collection(collection)
+
         except Exception as e:
-            logger.error(f"Error loading collection: {e}")
+            logger.error(f"Error loading/creating collection: {e}")
             return None
 
     def build_index(self, batch_size=50, force=False):
@@ -390,9 +412,7 @@ class OpenReviewFinder:
         logger.info(f"Indexing complete. Indexed {len(papers)} papers.")
         return collection
 
-    def _query_papers(
-        self, query, num_results=10, authors=None, keywords=None
-    ):
+    def _query_papers(self, query, num_results=10, authors=None, keywords=None):
         """
         Core search functionality that queries the ChromaDB collection
         and applies additional filtering.
@@ -478,9 +498,16 @@ class OpenReviewFinder:
                 "keywords": metadata.get("keywords", ""),
                 "pdf_url": metadata["pdf_url"],
                 "forum_url": metadata["forum_url"],
-                "similarity": results["distances"][0][idx]
-                if "distances" in results
-                else None,
+                # Get similarity score (1.0 - distance for cosine distance)
+                "similarity": (
+                    (1.0 - results["distances"][0][idx]) if (
+                        "distances" in results and
+                        results["distances"] and
+                        len(results["distances"]) > 0 and
+                        results["distances"][0] is not None and
+                        idx < len(results["distances"][0])
+                    ) else (1.0 - (0.05 * idx))  # Fallback based on result order
+                ),
             }
             matched_papers.append(paper)
             if len(matched_papers) >= num_results:
@@ -488,6 +515,32 @@ class OpenReviewFinder:
 
         return matched_papers
 
+    def _check_collection(self, collection):
+        """Check if the collection is properly configured with embeddings."""
+        if collection:
+            try:
+                # Run a test query to check if collection is working correctly
+                test_query = "test query"
+                logger.info(f"Running test query on collection: '{test_query}'")
+                test_results = collection.query(
+                    query_texts=[test_query], 
+                    n_results=1, 
+                    include=["metadatas", "distances"]
+                )
+                
+                # Log the test query results
+                logger.info(f"Test query returned keys: {list(test_results.keys())}")
+                if "distances" in test_results:
+                    logger.info("✓ Collection test query returned distances")
+                else:
+                    logger.warning("✗ Collection test query did NOT return distances")
+                
+                return collection
+            except Exception as e:
+                logger.error(f"Collection test query failed: {e}")
+                return None
+        return None
+        
     def _format_results_text(self, papers):
         """Format the results as a plain-text table for CLI output."""
         if not papers:
