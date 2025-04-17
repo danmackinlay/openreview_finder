@@ -126,7 +126,6 @@ def join_list_values(metadata):
     return sanitized
 
 
-
 def compress_data(obj):
     """Serialize and compress an object."""
     pickled = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
@@ -151,6 +150,7 @@ def determine_publication_status(invitations):
     elif any("withdrawn" in inv for inv in normalized):
         return "withdrawn"
     return "submission"
+
 
 # ===================
 # SPECTER2 Embedder
@@ -204,8 +204,7 @@ class CachedOpenReviewClient:
     """
 
     def __init__(
-        self, baseurl="https://api2.openreview.net",
-        cache_file=API_CACHE_FILE
+        self, baseurl="https://api2.openreview.net", cache_file=API_CACHE_FILE
     ):
         self.client = with_retry(api.OpenReviewClient)(baseurl=baseurl)
         self.cache = diskcache.Cache(
@@ -238,7 +237,6 @@ class OpenReviewFinder:
     def __init__(self):
         self.api_client = CachedOpenReviewClient()
 
-
     def extract_papers(self):
         logger.info("Fetching papers from ICLR 2025 conference...")
         papers_dict = {}
@@ -261,7 +259,9 @@ class OpenReviewFinder:
                     enumerate(papers), desc=f"Processing offset {offset}"
                 ):
                     if i == 0:  # Print the first note as a sample.
-                        logger.info(f"Sample paper structure:\n{pformat(paper, indent=4)}")
+                        logger.info(
+                            f"Sample paper structure:\n{pformat(paper, indent=4)}"
+                        )
                     if paper.id in papers_dict:
                         continue
                     status = determine_publication_status(paper.invitations)
@@ -307,7 +307,9 @@ class OpenReviewFinder:
                 collection = chroma_client.get_collection(
                     name=COLLECTION_NAME, embedding_function=embedding_function
                 )
-                logger.info(f"Successfully loaded collection with {collection.count()} documents")
+                logger.info(
+                    f"Successfully loaded collection with {collection.count()} documents"
+                )
                 # Test the collection to make sure it's configured correctly
                 return self._check_collection(collection)
             except Exception as e:
@@ -318,7 +320,9 @@ class OpenReviewFinder:
                 collection = chroma_client.create_collection(
                     name=COLLECTION_NAME,
                     embedding_function=embedding_function,
-                    metadata={"description": "ICLR 2025 papers with SPECTER2 embeddings"}
+                    metadata={
+                        "description": "ICLR 2025 papers with SPECTER2 embeddings"
+                    },
                 )
                 logger.info("New collection created. Please run indexing.")
                 # Test the new collection to make sure it's configured correctly
@@ -441,19 +445,25 @@ class OpenReviewFinder:
 
         # Examine each key in detail
         if "ids" in results:
-            logger.info(f"  - ids shape: {len(results['ids'])}x{len(results['ids'][0]) if results['ids'] else 0}")
+            logger.info(
+                f"  - ids shape: {len(results['ids'])}x{len(results['ids'][0]) if results['ids'] else 0}"
+            )
 
         if "distances" in results:
             if results["distances"]:
-                logger.info(f"  - distances shape: {len(results['distances'])}x{len(results['distances'][0]) if results['distances'][0] else 0}")
-                logger.info(f"  - First few distances: {results['distances'][0][:3] if results['distances'][0] else []}")
+                logger.info(
+                    f"  - distances shape: {len(results['distances'])}x{len(results['distances'][0]) if results['distances'][0] else 0}"
+                )
+                logger.info(
+                    f"  - First few distances: {results['distances'][0][:3] if results['distances'][0] else []}"
+                )
             else:
                 logger.info("  - distances key exists but is empty")
         else:
             logger.warning("  - distances key missing from ChromaDB results")
 
         # Log collection details
-        logger.info(f"Collection details:")
+        logger.info("Collection details:")
         logger.info(f"  - Collection name: {COLLECTION_NAME}")
         logger.info(f"  - Collection path: {CHROMA_DB_PATH}")
 
@@ -480,13 +490,15 @@ class OpenReviewFinder:
                 "forum_url": metadata["forum_url"],
                 # Get similarity score (1.0 - distance for cosine distance)
                 "similarity": (
-                    (1.0 - results["distances"][0][idx]) if (
-                        "distances" in results and
-                        results["distances"] and
-                        len(results["distances"]) > 0 and
-                        results["distances"][0] is not None and
-                        idx < len(results["distances"][0])
-                    ) else (1.0 - (0.05 * idx))  # Fallback based on result order
+                    (1.0 - results["distances"][0][idx])
+                    if (
+                        "distances" in results
+                        and results["distances"]
+                        and len(results["distances"]) > 0
+                        and results["distances"][0] is not None
+                        and idx < len(results["distances"][0])
+                    )
+                    else (1.0 - (0.05 * idx))  # Fallback based on result order
                 ),
             }
             matched_papers.append(paper)
@@ -505,7 +517,7 @@ class OpenReviewFinder:
                 test_results = collection.query(
                     query_texts=[test_query],
                     n_results=1,
-                    include=["metadatas", "distances"]
+                    include=["metadatas", "distances"],
                 )
 
                 # Log the test query results
@@ -587,20 +599,49 @@ def create_gradio_interface(finder):
     import gradio as gr
 
     def search_papers(query, num_results, author_input, keyword_input, history=None):
+        """Search for papers and update search history.
+
+        Args:
+            query: The search query string
+            num_results: Maximum number of results to return
+            author_input: Comma-separated author names to filter by
+            keyword_input: Comma-separated keywords to filter by
+            history: Search history from Gradio (could be DataFrame or None)
+
+        Returns:
+            tuple: (html_results, history_list) where history_list is a list of lists
+                  that Gradio will convert to a DataFrame
+        """
+        # Parse input filters
         authors = [a.strip() for a in author_input.split(",")] if author_input else []
         keywords = (
             [k.strip() for k in keyword_input.split(",")] if keyword_input else []
         )
+
+        # Perform search
         papers = finder._query_papers(query, num_results, authors, keywords)
         html_results = finder._format_results_html(papers, query)
 
-        # Initialize history with proper dataframe structure if None
-        if history is None or not isinstance(history, list) or len(history) == 0:
-            history = []
+        # === Handle history at the UI boundary ===
+        # At this interface point, explicitly convert from Gradio's DataFrame to our list format
+        import pandas as pd
+
+        # Create an empty history list if none provided
+        if history is None:
+            history_list = []
+        # Convert DataFrame to list if needed
+        elif isinstance(history, pd.DataFrame):
+            logger.info("Converting history from DataFrame to list")
+            history_list = history.values.tolist() if not history.empty else []
+        # Already a list
+        else:
+            history_list = history
 
         # Add the new search to history
-        history.append({"Query": query, "Results": f"{len(papers)} results"})
-        return html_results, history
+        history_list.append([query, f"{len(papers)} results"])
+
+        # Return the updated list (Gradio will convert back to DataFrame)
+        return html_results, history_list
 
     with gr.Blocks(title="ICLR 2025 Paper Search") as app:
         gr.Markdown("# ICLR 2025 Paper Search Engine")
@@ -629,7 +670,8 @@ def create_gradio_interface(finder):
                     datatype=["str", "str"],
                     row_count=(10, "dynamic"),
                     label="Previous Searches",
-                    value=[],  # Initialize with empty list
+                    value=[],  # Initialize with empty list of lists
+                    type="array",  # Explicitly use array type for clarity
                 )
         results_display = gr.HTML(label="Results")
         search_button.click(
