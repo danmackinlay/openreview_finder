@@ -732,6 +732,11 @@ def create_gradio_interface(finder):
 
     with gr.Blocks(title="ICLR 2025 Paper Search") as app:
         gr.Markdown("# ICLR 2025 Paper Search Engine")
+
+        # Add attribution as subtitle
+        gr.Markdown(
+            "*Developed by Dan MacKinlay | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)*"
+        )
         gr.Markdown(
             "Search for papers using semantic similarity with SPECTER2 embeddings"
         )
@@ -757,6 +762,19 @@ def create_gradio_interface(finder):
                     label="Click on any previous search to run it again",
                 )
         results_display = gr.HTML(label="Results")
+
+        # Add footer with credits at the bottom of the page
+        with gr.Row():
+            gr.HTML("""
+            <div style="margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; width: 100%;">
+                <p style="text-align: center; color: #666;">
+                    <strong>ICLR 2025 Paper Search</strong> | Developed by Dan MacKinlay | 
+                    <a href="https://www.csiro.au/" target="_blank">CSIRO</a> 
+                    (Commonwealth Scientific and Industrial Research Organisation)
+                </p>
+            </div>
+            """)
+
         # Handle regular search button clicks
         search_button.click(
             fn=search_papers,
@@ -779,9 +797,20 @@ def create_gradio_interface(finder):
 # CLI Commands
 # ===================
 @click.group()
+@click.version_option(version="1.0.0")
 def cli():
-    """ICLR Paper Search Utility - use semantic search on ICLR 2025 papers."""
-    pass
+    """ICLR Paper Search Utility - use semantic search on ICLR 2025 papers.
+
+    Developed by Dan MacKinlay (CSIRO - Commonwealth Scientific and Industrial Research Organisation)
+    """
+    # Display attribution banner on startup
+    click.echo("=" * 80)
+    click.echo("ICLR 2025 Paper Search")
+    click.echo(
+        "Developed by Dan MacKinlay | CSIRO (Commonwealth Scientific and Industrial Research Organisation)"
+    )
+    click.echo("=" * 80)
+    click.echo("")  # Empty line for spacing
 
 
 @cli.command()
