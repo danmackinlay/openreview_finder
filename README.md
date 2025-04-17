@@ -2,7 +2,7 @@
 
 A tool for extracting and semantically searching ICLR 2025 conference papers using SPECTER2 embeddings.
 
-**Developed by Dan MacKinlay | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)**
+**Developed by [Dan MacKinlay](https://danmackinlay.name) | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)**
 
 ## Features
 
@@ -142,4 +142,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ---
 
-Developed by Dan MacKinlay | CSIRO (Commonwealth Scientific and Industrial Research Organisation)
+Developed by [Dan MacKinlay](https://danmackinlay.name) | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)

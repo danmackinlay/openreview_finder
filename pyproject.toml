@@ -28,6 +28,7 @@ dependencies = [
 
 [project.urls]
 "Homepage" = "https://github.com/danmackinlay/openreview_finder"
+"Author" = "https://danmackinlay.name"
 "Organization" = "https://www.csiro.au/"
 
 [project.scripts]

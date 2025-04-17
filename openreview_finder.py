@@ -634,7 +634,7 @@ def create_gradio_interface(finder):
                 queryInput.value = query;
                 // Manually trigger an input event
                 queryInput.dispatchEvent(new Event('input', { bubbles: true }));
-                
+
                 // Find and click the search button
                 const searchBtns = document.querySelectorAll('button.primary');
                 if (searchBtns && searchBtns.length > 0) {
@@ -733,10 +733,6 @@ def create_gradio_interface(finder):
     with gr.Blocks(title="ICLR 2025 Paper Search") as app:
         gr.Markdown("# ICLR 2025 Paper Search Engine")
 
-        # Add attribution as subtitle
-        gr.Markdown(
-            "*Developed by Dan MacKinlay | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)*"
-        )
         gr.Markdown(
             "Search for papers using semantic similarity with SPECTER2 embeddings"
         )
@@ -768,8 +764,9 @@ def create_gradio_interface(finder):
             gr.HTML("""
             <div style="margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; width: 100%;">
                 <p style="text-align: center; color: #666;">
-                    <strong>ICLR 2025 Paper Search</strong> | Developed by Dan MacKinlay | 
-                    <a href="https://www.csiro.au/" target="_blank">CSIRO</a> 
+                    <strong>ICLR 2025 Paper Search</strong> | Developed by
+                    <a href="https://danmackinlay.name" target="_blank">Dan MacKinlay</a> |
+                    <a href="https://www.csiro.au/" target="_blank">CSIRO</a>
                     (Commonwealth Scientific and Industrial Research Organisation)
                 </p>
             </div>
@@ -801,14 +798,14 @@ def create_gradio_interface(finder):
 def cli():
     """ICLR Paper Search Utility - use semantic search on ICLR 2025 papers.
 
-    Developed by Dan MacKinlay (CSIRO - Commonwealth Scientific and Industrial Research Organisation)
+    Developed by Dan MacKinlay (https://danmackinlay.name)
+    CSIRO - Commonwealth Scientific and Industrial Research Organisation
     """
     # Display attribution banner on startup
     click.echo("=" * 80)
     click.echo("ICLR 2025 Paper Search")
-    click.echo(
-        "Developed by Dan MacKinlay | CSIRO (Commonwealth Scientific and Industrial Research Organisation)"
-    )
+    click.echo("Developed by Dan MacKinlay (https://danmackinlay.name)")
+    click.echo("CSIRO - Commonwealth Scientific and Industrial Research Organisation")
     click.echo("=" * 80)
     click.echo("")  # Empty line for spacing
 
