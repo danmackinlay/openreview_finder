@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+"""
+A script to extract, index, and search ICLR 2025 papers using OpenReview API and SPECTER2 embeddings.
+This script provides a command-line interface (CLI) for searching papers based on semantic similarity.
+It also includes a Gradio web interface for user-friendly interaction.
+"""
 import os
 import json
 import time
@@ -300,38 +305,7 @@ class OpenReviewFinder:
                     if paper.id in papers_dict:
                         continue
 
-                    # Default category is 'poster'
-                    category = "poster"
-                    decision_found = False
-
-                    # First, try to get decision from directReplies if available
-                    if getattr(paper, "details", None) and getattr(
-                        paper.details, "directReplies", None
-                    ):
-                        for reply in paper.details.directReplies:
-                            if (
-                                hasattr(reply, "invitation")
-                                and "Decision" in reply.invitation
-                            ):
-                                if "decision" in reply.content:
-                                    decision_text = reply.content["decision"].lower()
-                                    if "oral" in decision_text:
-                                        category = "oral"
-                                        decision_found = True
-                                    elif "spotlight" in decision_text:
-                                        category = "spotlight"
-                                        decision_found = True
-                                    if decision_found:
-                                        break
-
-                    # If not found in directReplies, check the bulk decision mapping.
-                    if not decision_found:
-                        decision_text = decision_mapping.get(paper.id, "")
-                        if decision_text:
-                            if "oral" in decision_text:
-                                category = "oral"
-                            elif "spotlight" in decision_text:
-                                category = "spotlight"
+                    # Category field has been removed as it's empty in the dataset
                     paper_data = {
                         "id": paper.id,
                         "number": paper.number if hasattr(paper, "number") else "",
@@ -346,7 +320,6 @@ class OpenReviewFinder:
                         ],
                         "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
                         "forum_url": f"https://openreview.net/forum?id={getattr(paper, 'forum', paper.id)}",
-                        "category": category,
                     }
                     # logger.info(f"Extracted paper data: {paper_data}")
                     papers_dict[paper.id] = join_list_values(paper_data)
@@ -418,7 +391,7 @@ class OpenReviewFinder:
         return collection
 
     def _query_papers(
-        self, query, num_results=10, category=None, authors=None, keywords=None
+        self, query, num_results=10, authors=None, keywords=None
     ):
         """
         Core search functionality that queries the ChromaDB collection
@@ -431,10 +404,8 @@ class OpenReviewFinder:
             )
             return []
 
-        # Build basic filter for category
+        # Initialize empty filter
         where_filter = {}
-        if category and category.lower() != "all":
-            where_filter["category"] = {"$eq": category.lower()}
 
         query_args = dict(
             query_texts=[query],
@@ -467,7 +438,6 @@ class OpenReviewFinder:
                 "title": metadata["title"],
                 "authors": metadata["authors"],
                 "abstract": metadata.get("abstract", ""),
-                "category": metadata["category"],
                 "keywords": metadata.get("keywords", ""),
                 "pdf_url": metadata["pdf_url"],
                 "forum_url": metadata["forum_url"],
@@ -500,13 +470,12 @@ class OpenReviewFinder:
                     idx + 1,
                     paper["title"],
                     authors_disp,
-                    paper["category"].upper(),
                     score,
                 ]
             )
         return tabulate(
             table_data,
-            headers=["#", "Title", "Authors", "Type", "Score"],
+            headers=["#", "Title", "Authors", "Score"],
             tablefmt="fancy_grid",
         )
 
@@ -524,17 +493,12 @@ class OpenReviewFinder:
                 if paper["similarity"] is not None
                 else ""
             )
-            # You might use a mapping for color by category
-            category_color = {
-                "oral": "#e74c3c",
-                "spotlight": "#3498db",
-                "poster": "#2ecc71",
-            }.get(paper["category"].lower(), "#7f8c8d")
+            # Use consistent color for all papers
+            paper_color = "#7f8c8d"
             html += f"""
-            <div style="margin-bottom: 25px; padding: 15px; border-left: 5px solid {category_color}; background-color: #f9f9f9;">
+            <div style="margin-bottom: 25px; padding: 15px; border-left: 5px solid {paper_color}; background-color: #f9f9f9;">
                 <h3 style="margin-top: 0; color: #2c3e50;">{i + 1}. {paper["title"]} {score_display}</h3>
                 <p style="color: #7f8c8d;"><b>Authors:</b> {", ".join(paper["authors"])}</p>
-                <p style="color: #7f8c8d;"><b>Category:</b> <span style="text-transform: uppercase; background-color: {category_color}; color: white; padding: 2px 6px; border-radius: 3px;">{paper["category"]}</span></p>
                 <p><b>Abstract:</b> {paper["abstract"]}</p>
                 <p><b>Keywords:</b> {paper["keywords"]}</p>
                 <div>
@@ -553,13 +517,13 @@ def create_gradio_interface(finder):
     import gradio as gr
 
     def search_papers(
-        query, num_results, category, author_input, keyword_input, history=None
+        query, num_results, author_input, keyword_input, history=None
     ):
         authors = [a.strip() for a in author_input.split(",")] if author_input else []
         keywords = (
             [k.strip() for k in keyword_input.split(",")] if keyword_input else []
         )
-        papers = finder._query_papers(query, num_results, category, authors, keywords)
+        papers = finder._query_papers(query, num_results, authors, keywords)
         html_results = finder._format_results_html(papers, query)
         if history is None:
             history = []
@@ -578,11 +542,6 @@ def create_gradio_interface(finder):
                 )
                 num_results = gr.Slider(
                     minimum=1, maximum=50, value=10, step=1, label="Number of Results"
-                )
-                category_filter = gr.Dropdown(
-                    choices=["All", "Oral", "Spotlight", "Poster"],
-                    value="All",
-                    label="Category Filter",
                 )
                 author_filter = gr.Textbox(
                     label="Filter by Authors", placeholder="Separate by commas"
@@ -606,7 +565,6 @@ def create_gradio_interface(finder):
             inputs=[
                 query_input,
                 num_results,
-                category_filter,
                 author_filter,
                 keyword_filter,
                 search_history,
@@ -643,13 +601,6 @@ def index(force, batch_size):
 @click.argument("query")
 @click.option("--num-results", "-n", default=10, help="Number of results to return")
 @click.option(
-    "--category",
-    "-c",
-    type=click.Choice(["oral", "spotlight", "poster", "All"]),
-    default="All",
-    help="Filter by paper category",
-)
-@click.option(
     "--author", "-a", multiple=True, help="Filter by author name (multiple allowed)"
 )
 @click.option(
@@ -663,10 +614,10 @@ def index(force, batch_size):
     help="Output format",
 )
 @click.option("--output", "-o", help="Path to save output")
-def search(query, num_results, category, author, keyword, format, output):
+def search(query, num_results, author, keyword, format, output):
     finder = OpenReviewFinder()
     papers = finder._query_papers(
-        query, num_results, category, list(author), list(keyword)
+        query, num_results, list(author), list(keyword)
     )
     # Choose the output format using the helper functions.
     if format == "csv":
