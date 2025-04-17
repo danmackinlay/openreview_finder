@@ -598,7 +598,84 @@ class OpenReviewFinder:
 def create_gradio_interface(finder):
     import gradio as gr
 
-    def search_papers(query, num_results, author_input, keyword_input, history=None):
+    def format_history_html(history_items):
+        """Format search history as clickable HTML elements.
+
+        Args:
+            history_items: List of [query, results] pairs
+
+        Returns:
+            str: HTML string with clickable history items
+        """
+        if not history_items:
+            return "<div class='search-history-empty'>No previous searches</div>"
+
+        html = "<div class='search-history-container'>"
+        for i, (query, result) in enumerate(history_items):
+            # Escape quotes in the query for the data attribute
+            query_esc = query.replace('"', "&quot;")
+            html += f"""
+            <div class="search-history-item" onclick="rerunSearch(this)" data-query="{query_esc}">
+                <div class="search-query">{query}</div>
+                <div class="search-results">{result}</div>
+            </div>
+            """
+        html += "</div>"
+
+        # Add the JavaScript function to handle clicks
+        html += """
+        <script>
+        function rerunSearch(element) {
+            const query = element.getAttribute('data-query');
+            // Find the query input element - look for the search query textbox
+            const queryInputs = document.querySelectorAll('input[placeholder="Enter search query..."]');
+            if (queryInputs && queryInputs.length > 0) {
+                const queryInput = queryInputs[0];
+                queryInput.value = query;
+                // Manually trigger an input event
+                queryInput.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                // Find and click the search button
+                const searchBtns = document.querySelectorAll('button.primary');
+                if (searchBtns && searchBtns.length > 0) {
+                    searchBtns[0].click();
+                }
+            }
+        }
+        </script>
+        <style>
+        .search-history-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .search-history-item {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .search-history-item:hover {
+            background-color: #f0f0f0;
+        }
+        .search-query {
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+        .search-results {
+            font-size: 0.9em;
+            color: #666;
+        }
+        </style>
+        """
+        return html
+
+    def search_papers(
+        query, num_results, author_input, keyword_input, history_html=None
+    ):
         """Search for papers and update search history.
 
         Args:
@@ -606,42 +683,52 @@ def create_gradio_interface(finder):
             num_results: Maximum number of results to return
             author_input: Comma-separated author names to filter by
             keyword_input: Comma-separated keywords to filter by
-            history: Search history from Gradio (could be DataFrame or None)
+            history_html: Current search history HTML
 
         Returns:
-            tuple: (html_results, history_list) where history_list is a list of lists
-                  that Gradio will convert to a DataFrame
+            tuple: (html_results, history_html) where history_html is the HTML
+                  representation of the search history
         """
+        # Get persistent history from our in-memory storage
+        # We need to maintain history ourselves since we're using HTML
+        if not hasattr(search_papers, "history_items"):
+            search_papers.history_items = []
+
         # Parse input filters
         authors = [a.strip() for a in author_input.split(",")] if author_input else []
         keywords = (
             [k.strip() for k in keyword_input.split(",")] if keyword_input else []
         )
 
+        # Skip empty queries
+        if not query.strip():
+            # Return current state unchanged
+            return None, format_history_html(search_papers.history_items)
+
         # Perform search
         papers = finder._query_papers(query, num_results, authors, keywords)
         html_results = finder._format_results_html(papers, query)
 
-        # === Handle history at the UI boundary ===
-        # At this interface point, explicitly convert from Gradio's DataFrame to our list format
-        import pandas as pd
+        # Update history if this is a new query
+        history_entry = [query, f"{len(papers)} results"]
 
-        # Create an empty history list if none provided
-        if history is None:
-            history_list = []
-        # Convert DataFrame to list if needed
-        elif isinstance(history, pd.DataFrame):
-            logger.info("Converting history from DataFrame to list")
-            history_list = history.values.tolist() if not history.empty else []
-        # Already a list
-        else:
-            history_list = history
+        # Remove this query if it already exists
+        search_papers.history_items = [
+            h for h in search_papers.history_items if h[0] != query
+        ]
 
-        # Add the new search to history
-        history_list.append([query, f"{len(papers)} results"])
+        # Add to top of history
+        search_papers.history_items.insert(0, history_entry)
 
-        # Return the updated list (Gradio will convert back to DataFrame)
-        return html_results, history_list
+        # Limit history size
+        if len(search_papers.history_items) > 15:
+            search_papers.history_items = search_papers.history_items[:15]
+
+        # Format history as HTML
+        history_html = format_history_html(search_papers.history_items)
+
+        # Return the HTML results and updated history HTML
+        return html_results, history_html
 
     with gr.Blocks(title="ICLR 2025 Paper Search") as app:
         gr.Markdown("# ICLR 2025 Paper Search Engine")
@@ -665,15 +752,12 @@ def create_gradio_interface(finder):
                 search_button = gr.Button("Search", variant="primary")
             with gr.Column(scale=1):
                 gr.Markdown("### Search History")
-                search_history = gr.Dataframe(
-                    headers=["Query", "Results"],
-                    datatype=["str", "str"],
-                    row_count=(10, "dynamic"),
-                    label="Previous Searches",
-                    value=[],  # Initialize with empty list of lists
-                    type="array",  # Explicitly use array type for clarity
+                search_history = gr.HTML(
+                    value="<div class='search-history-empty'>No previous searches</div>",
+                    label="Click on any previous search to run it again",
                 )
         results_display = gr.HTML(label="Results")
+        # Handle regular search button clicks
         search_button.click(
             fn=search_papers,
             inputs=[
@@ -685,6 +769,9 @@ def create_gradio_interface(finder):
             ],
             outputs=[results_display, search_history],
         )
+
+        # Note: We're now handling the search history clicks via JavaScript directly
+        # This allows for a more interactive experience without full page reloads
     return app
 
 
