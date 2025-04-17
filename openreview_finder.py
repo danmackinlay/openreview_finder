@@ -124,7 +124,6 @@ def join_list_values(metadata):
     return sanitized
 
 
-
 def compress_data(obj):
     """Serialize and compress an object."""
     pickled = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
@@ -204,8 +203,7 @@ class CachedOpenReviewClient:
     """
 
     def __init__(
-        self, baseurl="https://api2.openreview.net",
-        cache_file=API_CACHE_FILE
+        self, baseurl="https://api2.openreview.net", cache_file=API_CACHE_FILE
     ):
         self.client = with_retry(api.OpenReviewClient)(baseurl=baseurl)
         self.cache = diskcache.Cache(
@@ -580,20 +578,49 @@ def create_gradio_interface(finder):
     import gradio as gr
 
     def search_papers(query, num_results, author_input, keyword_input, history=None):
+        """Search for papers and update search history.
+
+        Args:
+            query: The search query string
+            num_results: Maximum number of results to return
+            author_input: Comma-separated author names to filter by
+            keyword_input: Comma-separated keywords to filter by
+            history: Search history from Gradio (could be DataFrame or None)
+
+        Returns:
+            tuple: (html_results, history_list) where history_list is a list of lists
+                  that Gradio will convert to a DataFrame
+        """
+        # Parse input filters
         authors = [a.strip() for a in author_input.split(",")] if author_input else []
         keywords = (
             [k.strip() for k in keyword_input.split(",")] if keyword_input else []
         )
+
+        # Perform search
         papers = finder._query_papers(query, num_results, authors, keywords)
         html_results = finder._format_results_html(papers, query)
 
-        # Initialize history with proper dataframe structure if None
-        if history is None or not isinstance(history, list) or len(history) == 0:
-            history = []
+        # === Handle history at the UI boundary ===
+        # At this interface point, explicitly convert from Gradio's DataFrame to our list format
+        import pandas as pd
+
+        # Create an empty history list if none provided
+        if history is None:
+            history_list = []
+        # Convert DataFrame to list if needed
+        elif isinstance(history, pd.DataFrame):
+            logger.info("Converting history from DataFrame to list")
+            history_list = history.values.tolist() if not history.empty else []
+        # Already a list
+        else:
+            history_list = history
 
         # Add the new search to history
-        history.append({"Query": query, "Results": f"{len(papers)} results"})
-        return html_results, history
+        history_list.append([query, f"{len(papers)} results"])
+
+        # Return the updated list (Gradio will convert back to DataFrame)
+        return html_results, history_list
 
     with gr.Blocks(title="ICLR 2025 Paper Search") as app:
         gr.Markdown("# ICLR 2025 Paper Search Engine")
@@ -622,7 +649,8 @@ def create_gradio_interface(finder):
                     datatype=["str", "str"],
                     row_count=(10, "dynamic"),
                     label="Previous Searches",
-                    value=[],  # Initialize with empty list
+                    value=[],  # Initialize with empty list of lists
+                    type="array",  # Explicitly use array type for clarity
                 )
         results_display = gr.HTML(label="Results")
         search_button.click(
