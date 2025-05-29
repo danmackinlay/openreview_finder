@@ -18,7 +18,7 @@ A tool for extracting and semantically searching ICLR 2025 conference papers usi
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/openreview-finder.git
+   git clone https://github.com/danmackinlay/openreview-finder.git
    cd openreview-finder
    ```
 
@@ -26,6 +26,11 @@ A tool for extracting and semantically searching ICLR 2025 conference papers usi
    ```bash
    # Make sure uv is installed (https://github.com/astral-sh/uv)
    uv pip install -e .
+   ```
+
+3. You can run the tool in two ways:
+   ```bash
+   uv run openreview-finder index
    ```
 
 ## Usage
@@ -71,19 +76,19 @@ Examples:
 
 ```bash
 # Limit to top 5 results
-openreview-finder search "attention mechanism" --num-results 5
+uv run openreview-finder search "attention mechanism" --num-results 5
 
 # Filter by author
-openreview-finder search "reinforcement learning" --author "Yoshua Bengio"
+uv run openreview-finder search "reinforcement learning" --author "Yoshua Bengio"
 
 # Filter by keyword
-openreview-finder search "graph neural networks" --keyword "attention"
+uv run openreview-finder search "graph neural networks" --keyword "attention"
 
 # Output in JSON format
-openreview-finder search "language models" --format json
+uv run openreview-finder search "language models" --format json
 
 # Save results to file
-openreview-finder search "diffusion models" --output results.csv
+uv run openreview-finder search "diffusion models" --output results.csv
 ```
 
 ### Web Interface
@@ -91,7 +96,7 @@ openreview-finder search "diffusion models" --output results.csv
 To launch the web interface for interactive searching:
 
 ```bash
-openreview-finder web
+uv run openreview-finder web
 ```
 
 This opens a Gradio web interface in your browser with:

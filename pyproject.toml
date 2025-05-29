@@ -32,7 +32,7 @@ dependencies = [
 "Organization" = "https://www.csiro.au/"
 
 [project.scripts]
-openreview-finder = "openreview_finder.cli:cli"
+openreview-finder = "openreview_finder:cli"
 
 [build-system]
 requires = ["hatchling"]
