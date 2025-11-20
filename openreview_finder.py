@@ -319,7 +319,10 @@ class OpenReviewFinder:
                     "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
                     "forum_url": f"https://openreview.net/forum?id={getattr(paper, 'forum', paper.id)}",
                 }
-                papers_dict[paper.id] = join_list_values(paper_data)
+                # Convert list fields to semicolon-separated strings
+                paper_dict = join_list_values(paper_data)
+                # Keep author names with original capitalization (filtering now done in Python)
+                papers_dict[paper.id] = paper_dict
 
         except Exception as e:
             logger.error(f"Error during extraction: {e}")
@@ -427,8 +430,8 @@ class OpenReviewFinder:
 
     def _query_papers(self, query, num_results=10, authors=None, keywords=None):
         """
-        Core search functionality that queries the ChromaDB collection
-        and applies additional filtering.
+        Core search functionality: semantic search via ChromaDB, then
+        post-filter results in Python for author/keyword substring matching.
         """
         collection = self._load_collection()
         if not collection:
@@ -437,122 +440,101 @@ class OpenReviewFinder:
             )
             return []
 
-        # Initialize filters
-        where_document = None
+        # Normalize filters for case-insensitive matching
+        authors = [a.strip().lower() for a in (authors or []) if a.strip()]
+        keywords = [k.strip().lower() for k in (keywords or []) if k.strip()]
 
-        # Add author filter if provided
-        if authors:
-            # Create a filter for authors
-            author_filters = []
-            for auth in authors:
-                author_filters.append({"$contains": auth})
+        # Request more candidates than needed to give filters room to work
+        # Use 5x multiplier or minimum of 100 candidates
+        candidate_k = max(num_results * 5, 100)
 
-            # If multiple authors, use $or to check for any
-            if len(author_filters) > 1:
-                author_filter = {"$or": author_filters}
-            else:
-                author_filter = author_filters[0]
+        if authors or keywords:
+            logger.info(f"Filters requested: authors={authors}, keywords={keywords}")
+            logger.info(f"Requesting {candidate_k} candidates for filtering")
 
-            where_document = author_filter
-
-        # Add keyword filter if provided
-        if keywords:
-            # Create a filter for keywords
-            keyword_filters = []
-            for kw in keywords:
-                keyword_filters.append({"$contains": kw})
-
-            # If multiple keywords, use $or to check for any
-            if len(keyword_filters) > 1:
-                keyword_filter = {"$or": keyword_filters}
-            else:
-                keyword_filter = keyword_filters[0]
-
-            # If we already have an author filter, combine with $and
-            if where_document:
-                where_document = {"$and": [where_document, keyword_filter]}
-            else:
-                where_document = keyword_filter
-
-        # Build query arguments
+        # Build query arguments - no metadata filters, pure semantic search
         query_args = dict(
             query_texts=[query],
-            n_results=num_results,
+            n_results=candidate_k,
             include=["metadatas", "documents", "distances"],
         )
 
-        # Add document filters if any
-        if where_document:
-            query_args["where_document"] = where_document
-            logger.info(f"Using document filters: {where_document}")
-
-        logger.info(f"Executing query with args: {query_args}")
+        logger.info(f"Executing ChromaDB query: '{query}' with n_results={candidate_k}")
         results = collection.query(**query_args)
 
-        # Detailed debug information for ChromaDB results
-        logger.info(f"ChromaDB query returned with keys: {list(results.keys())}")
+        # Debug logging
+        logger.info(f"ChromaDB returned {len(results['ids'][0]) if results['ids'] else 0} candidates")
 
-        # Examine each key in detail
-        if "ids" in results:
-            logger.info(
-                f"  - ids shape: {len(results['ids'])}x{len(results['ids'][0]) if results['ids'] else 0}"
-            )
-
-        if "distances" in results:
-            if results["distances"]:
-                logger.info(
-                    f"  - distances shape: {len(results['distances'])}x{len(results['distances'][0]) if results['distances'][0] else 0}"
-                )
-                logger.info(
-                    f"  - First few distances: {results['distances'][0][:3] if results['distances'][0] else []}"
-                )
-            else:
-                logger.info("  - distances key exists but is empty")
-        else:
-            logger.warning("  - distances key missing from ChromaDB results")
-
-        # Log collection details
-        logger.info("Collection details:")
-        logger.info(f"  - Collection name: {self.config.collection_name}")
-        logger.info(f"  - Collection path: {self.config.db_path}")
-
-        # Print query details in a clean format for debugging
-        logger.info(f"Query text: '{query}'")
-        logger.info(f"Requested results: {num_results}")
-        logger.info(f"Query included: {query_args['include']}")
-
-        if not results["ids"][0]:
+        if not results["ids"] or not results["ids"][0]:
             logger.warning("No results returned from ChromaDB")
             return []
 
-        # Process results - no need for additional filtering as ChromaDB does it for us
-        matched_papers = []
+        # Build candidate list with metadata and distances
+        candidates = []
         for idx, paper_id in enumerate(results["ids"][0]):
             metadata = results["metadatas"][0][idx]
+            dist = (
+                results["distances"][0][idx]
+                if (
+                    "distances" in results
+                    and results["distances"]
+                    and len(results["distances"]) > 0
+                    and results["distances"][0] is not None
+                    and idx < len(results["distances"][0])
+                )
+                else None
+            )
+            candidates.append((paper_id, metadata, dist))
+
+        # Python-based filtering functions
+        def matches_authors(meta):
+            """Check if all author filters match (case-insensitive substring)."""
+            if not authors:
+                return True
+            auth_str = meta.get("authors", "").lower()
+            return all(a in auth_str for a in authors)
+
+        def matches_keywords(meta):
+            """Check if all keyword filters match (case-insensitive substring)."""
+            if not keywords:
+                return True
+            kw_str = meta.get("keywords", "").lower()
+            return all(k in kw_str for k in keywords)
+
+        # Apply filters
+        filtered = [
+            (paper_id, meta, dist)
+            for (paper_id, meta, dist) in candidates
+            if matches_authors(meta) and matches_keywords(meta)
+        ]
+
+        # If filters eliminated everything, fall back to unfiltered results
+        if not filtered and (authors or keywords):
+            logger.warning(
+                f"No candidates matched filters (authors={authors}, keywords={keywords}); "
+                "returning top unfiltered results"
+            )
+            filtered = candidates
+
+        logger.info(f"After filtering: {len(filtered)} papers remain")
+
+        # Truncate to requested number (candidates are already sorted by distance)
+        filtered = filtered[:num_results]
+
+        # Build final paper objects
+        matched_papers = []
+        for paper_id, meta, dist in filtered:
             paper = {
                 "id": paper_id,
-                "title": metadata["title"],
-                "authors": metadata["authors"],
-                "abstract": metadata.get("abstract", ""),
-                "keywords": metadata.get("keywords", ""),
-                "pdf_url": metadata["pdf_url"],
-                "forum_url": metadata["forum_url"],
-                # Get similarity score (1.0 - distance for cosine distance)
-                "similarity": (
-                    (1.0 - results["distances"][0][idx])
-                    if (
-                        "distances" in results
-                        and results["distances"]
-                        and len(results["distances"]) > 0
-                        and results["distances"][0] is not None
-                        and idx < len(results["distances"][0])
-                    )
-                    else (1.0 - (0.05 * idx))  # Fallback based on result order
-                ),
+                "title": meta["title"],
+                "authors": meta["authors"],
+                "abstract": meta.get("abstract", ""),
+                "keywords": meta.get("keywords", ""),
+                "pdf_url": meta["pdf_url"],
+                "forum_url": meta["forum_url"],
+                "similarity": (1.0 - dist) if dist is not None else None,
             }
             matched_papers.append(paper)
-            if len(matched_papers) >= num_results:
-                break
 
         return matched_papers
 
@@ -788,7 +770,8 @@ def create_gradio_interface(finder):
         with gr.Row():
             with gr.Column(scale=3):
                 query_input = gr.Textbox(
-                    label="Search Query", placeholder="Enter search query..."
+                    label="Search Query",
+                    placeholder="Enter search query...",
                 )
                 num_results = gr.Slider(
                     minimum=1, maximum=50, value=10, step=1, label="Number of Results"
@@ -823,6 +806,43 @@ def create_gradio_interface(finder):
 
         # Handle regular search button clicks
         search_button.click(
+            fn=search_papers,
+            inputs=[
+                query_input,
+                num_results,
+                author_filter,
+                keyword_filter,
+                search_history,
+            ],
+            outputs=[results_display, search_history],
+        )
+
+        # Handle enter key press in any textbox
+        query_input.submit(
+            fn=search_papers,
+            inputs=[
+                query_input,
+                num_results,
+                author_filter,
+                keyword_filter,
+                search_history,
+            ],
+            outputs=[results_display, search_history],
+        )
+
+        author_filter.submit(
+            fn=search_papers,
+            inputs=[
+                query_input,
+                num_results,
+                author_filter,
+                keyword_filter,
+                search_history,
+            ],
+            outputs=[results_display, search_history],
+        )
+
+        keyword_filter.submit(
             fn=search_papers,
             inputs=[
                 query_input,

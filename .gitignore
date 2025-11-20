@@ -182,3 +182,4 @@ api_cache/*
 
 _plans/
 .vscode/
+uv.lock

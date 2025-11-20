@@ -6,11 +6,13 @@ Indexes **5,275 accepted papers** from NeurIPS 2025 using the OpenReview API v2 
 
 **Developed by [Dan MacKinlay](https://danmackinlay.name) | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)**
 
+![](search.png)
+
 ## Quick Start
 
 ```bash
 # Install dependencies
-uv sync 
+uv sync
 
 # Index NeurIPS 2025 papers (~10 minutes, one-time setup)
 uv run openreview-finder index
@@ -34,17 +36,14 @@ uv run openreview-finder web
 
 ## Installation
 
-1. Clone this repository:
+1. [Make sure uv is installed](https://github.com/astral-sh/uv)
+
+2. Clone this repository:
    ```bash
    git clone https://github.com/danmackinlay/openreview-finder.git
    cd openreview-finder
    ```
 
-2. Install the package using uv:
-   ```bash
-   # Make sure uv is installed (https://github.com/astral-sh/uv)
-   uv sync
-   ```
 
 ## Usage
 
@@ -109,14 +108,15 @@ uv run openreview-finder search "diffusion models" --output results.csv
 ```bash
 $ uv run openreview-finder search "diffusion models for image generation" -n 3
 
-╒═════╤═══════════════════════════════════════════════════════════════════════╤═════════════════════════════════╤═════════╕
-│   # │ Title                                                                 │ Authors                         │   Score │
-╞═════╪═══════════════════════════════════════════════════════════════════════╪═════════════════════════════════╪═════════╡
-│   1 │ Hierarchical Koopman Diffusion: Fast Generation with Interpretable... │ Hanru Bai, Weiyang Ding, et al  │  0.8953 │
-│   2 │ Composition and Alignment of Diffusion Models using Constrained...    │ Shervin Khalafi, Ignacio H...   │  0.8851 │
-│   3 │ DiCo: Revitalizing ConvNets for Scalable and Efficient Diffusion...   │ Yuang Ai, Qihang Fan, et al     │  0.8816 │
-╘═════╧═══════════════════════════════════════════════════════════════════════╧═════════════════════════════════╧═════════╛
-```
+╒═════╤═════════════════════════════════════════════════════════════════════════════════════════╤══════════════════════════════════════════════════════════════════╤═════════╕
+│   # │ Title                                                                                   │ Authors                                                          │   Score │
+╞═════╪═════════════════════════════════════════════════════════════════════════════════════════╪══════════════════════════════════════════════════════════════════╪═════════╡
+│   1 │ Hierarchical Koopman Diffusion: Fast Generation with Interpretable Diffusion Trajectory │ ['Hanru Bai', 'Weiyang Ding', 'Difan Zou']                       │  0.8953 │
+├─────┼─────────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┼─────────┤
+│   2 │ Composition and Alignment of Diffusion Models using Constrained Learning                │ ['Shervin Khalafi', 'Ignacio Hounie', 'Dongsheng Ding', 'et al'] │  0.8851 │
+├─────┼─────────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┼─────────┤
+│   3 │ DiCo: Revitalizing ConvNets for Scalable and Efficient Diffusion Modeling               │ ['Yuang Ai', 'Qihang Fan', 'Xuefeng Hu', 'et al']                │  0.8816 │
+╘═════╧═════════════════════════════════════════════════════════════════════════════════════════╧══════════════════════════════════════════════════════════════════╧═════════╛```
 
 ### Web Interface
 
