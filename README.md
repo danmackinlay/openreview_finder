@@ -148,7 +148,7 @@ Previous versions filtered based on invitation-based filtering, but this aligns 
 
 ### SPECTER2 Embeddings
 
-This tool uses the SPECTER2 model from the Allen Institute for AI, which is specifically designed for scientific papers. It creates embeddings that capture the semantic meaning of academic text better than general-purpose embedding models.
+This tool uses the [SPECTER2 model](https://huggingface.co/allenai/specter2) from the [Allen Institute for AI](https://allenai.org/), which is specifically designed for scientific papers. It creates embeddings that capture the semantic meaning of academic text better than general-purpose embedding models.
 
 The first time you run the indexing command, it will download the SPECTER2 model (about 440MB).
 
