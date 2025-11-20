@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-A script to extract, index, and search ICLR 2025 papers using OpenReview API and SPECTER2 embeddings.
+A script to extract, index, and search NeurIPS 2025 papers using OpenReview API and SPECTER2 embeddings.
 This script provides a command-line interface (CLI) for searching papers based on semantic similarity.
 It also includes a Gradio web interface for user-friendly interaction.
 """
@@ -14,6 +14,7 @@ import click
 import torch
 import pandas as pd
 import numpy as np
+from dataclasses import dataclass
 from tqdm.auto import tqdm
 from tabulate import tabulate
 from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
@@ -28,15 +29,35 @@ import chromadb
 from transformers import AutoTokenizer
 from adapters import AutoAdapterModel
 
+
+# ===================
+# Venue Configuration
+# ===================
+@dataclass
+class VenueConfig:
+    """Configuration for a specific conference venue."""
+
+    venue_id: str  # e.g., "NeurIPS.cc/2025/Conference"
+    label: str  # e.g., "NeurIPS 2025"
+    collection_name: str  # e.g., "neurips2025_papers"
+    db_path: str  # e.g., "./chroma_db/neurips"
+
+
+# NeurIPS 2025 configuration
+NEURIPS2025 = VenueConfig(
+    venue_id="NeurIPS.cc/2025/Conference",
+    label="NeurIPS 2025",
+    collection_name="neurips2025_papers",
+    db_path="./chroma_db/neurips",
+)
+
 # ===================
 # Configuration
 # ===================
-CHROMA_DB_PATH = "./chroma_db"
-COLLECTION_NAME = "iclr2025_papers"
 API_CACHE_FILE = "./api_cache"
 
 # Ensure required directories exist
-os.makedirs(CHROMA_DB_PATH, exist_ok=True)
+os.makedirs(NEURIPS2025.db_path, exist_ok=True)
 
 # ===================
 # Logging Configuration
@@ -47,7 +68,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(), logging.FileHandler("openreview_finder.log")],
 )
 logger = logging.getLogger(__name__)
-logging.getLogger("chromadb").setLevel(logging.DEBUG)
+logging.getLogger("chromadb").setLevel(logging.INFO)
 
 
 # ===================
@@ -138,20 +159,6 @@ def decompress_data(data):
     return pickle.loads(decompressed)
 
 
-def determine_publication_status(invitations):
-    """
-    Determine publication status based on invitations.
-    Returns a status string (e.g., 'published', 'withdrawn', or 'submission').
-    """
-    # Normalize all invitation strings
-    normalized = [invitation.lower() for invitation in invitations]
-    if any("camera_ready" in inv for inv in normalized):
-        return "published"
-    elif any("withdrawn" in inv for inv in normalized):
-        return "withdrawn"
-    return "submission"
-
-
 # ===================
 # SPECTER2 Embedder
 # ===================
@@ -224,71 +231,99 @@ class CachedOpenReviewClient:
             self.cache.set(key, result)
             return result
 
+    def get_all_notes(self, **kwargs):
+        """Get all notes matching the criteria (API v2 style)."""
+        key = f"get_all_notes-{json.dumps(kwargs, sort_keys=True)}"
+        cached_response = self.cache.get(key)
+        if cached_response is not None:
+            logger.info(f"Cache hit for key: {key}")
+            return cached_response
+        else:
+            logger.info(f"Cache miss for key: {key}. Making API call...")
+            result = with_retry(self.client.get_all_notes)(**kwargs)
+            self.cache.set(key, result)
+            return result
+
+    def get_group(self, id):
+        """Get venue group metadata."""
+        key = f"get_group-{id}"
+        cached_response = self.cache.get(key)
+        if cached_response is not None:
+            logger.info(f"Cache hit for key: {key}")
+            return cached_response
+        else:
+            logger.info(f"Cache miss for key: {key}. Making API call...")
+            result = with_retry(self.client.get_group)(id=id)
+            self.cache.set(key, result)
+            return result
+
 
 # ===================
 # OpenReview Finder
 # ===================
 class OpenReviewFinder:
     """
-    Handles extraction, indexing, and searching of ICLR papers.
+    Handles extraction, indexing, and searching of conference papers.
     No persistent checkpoint; extraction results are built in memory.
     """
 
-    def __init__(self):
+    def __init__(self, config: VenueConfig = NEURIPS2025):
+        self.config = config
         self.api_client = CachedOpenReviewClient()
+        # Single shared embedder for all indexing and querying
+        self.embedding_function = SPECTER2Embedder()
 
     def extract_papers(self):
-        logger.info("Fetching papers from ICLR 2025 conference...")
+        logger.info(f"Fetching accepted papers from {self.config.venue_id}...")
         papers_dict = {}
-        offset = 0
 
-        # Fetch submission papers in batches
-        while True:
-            try:
-                papers = self.api_client.get_notes(
-                    invitation="ICLR.cc/2025/Conference/-/Submission",
-                    details="original,tags,revisions",
-                    offset=offset,
-                    limit=1000,
-                )
-                logger.info(f"Fetched {len(papers)} papers at offset {offset}.")
-                if not papers:
-                    break
+        try:
+            # Use API v2 style venueid filtering to get only accepted papers
+            notes = self.api_client.get_all_notes(
+                content={"venueid": self.config.venue_id},
+                details="original,tags,revisions",
+            )
+            logger.info(
+                f"Fetched {len(notes)} accepted papers from {self.config.label}."
+            )
 
-                for i, paper in tqdm(
-                    enumerate(papers), desc=f"Processing offset {offset}"
-                ):
-                    if i == 0:  # Print the first note as a sample.
-                        logger.info(
-                            f"Sample paper structure:\n{pformat(paper, indent=4)}"
-                        )
-                    if paper.id in papers_dict:
-                        continue
-                    status = determine_publication_status(paper.invitations)
-                    if status != "published":
-                        continue
-                    paper_data = {
-                        "id": paper.id,
-                        "number": paper.number if hasattr(paper, "number") else "",
-                        "title": clean_field(paper.content.get("title", "[No Title]")),
-                        "abstract": clean_field(paper.content.get("abstract", "")),
-                        "authors": [
-                            a for a in clean_field(paper.content.get("authors", []))
-                        ],
-                        "keywords": [
-                            k.lower()
-                            for k in clean_field(paper.content.get("keywords", []))
-                        ],
-                        "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
-                        "forum_url": f"https://openreview.net/forum?id={getattr(paper, 'forum', paper.id)}",
-                    }
-                    # logger.info(f"Extracted paper data: {paper_data}")
-                    papers_dict[paper.id] = join_list_values(paper_data)
+            for i, paper in tqdm(
+                enumerate(notes), desc="Processing papers", total=len(notes)
+            ):
+                if i == 0:  # Print the first note as a sample
+                    logger.info(f"Sample paper structure:\n{pformat(paper, indent=4)}")
 
-                offset += len(papers)
-            except Exception as e:
-                logger.error(f"Error during extraction: {e}")
-                break
+                if paper.id in papers_dict:
+                    continue
+
+                # Verify this is actually an accepted paper by checking venueid
+                paper_venueid = clean_field(paper.content.get("venueid", ""))
+                if paper_venueid != self.config.venue_id:
+                    logger.warning(
+                        f"Paper {paper.id} has unexpected venueid: {paper_venueid}"
+                    )
+                    continue
+
+                paper_data = {
+                    "id": paper.id,
+                    "number": paper.number if hasattr(paper, "number") else "",
+                    "title": clean_field(paper.content.get("title", "[No Title]")),
+                    "abstract": clean_field(paper.content.get("abstract", "")),
+                    "authors": [
+                        a for a in clean_field(paper.content.get("authors", []))
+                    ],
+                    "keywords": [
+                        k.lower()
+                        for k in clean_field(paper.content.get("keywords", []))
+                    ],
+                    "pdf_url": f"https://openreview.net/pdf?id={paper.id}",
+                    "forum_url": f"https://openreview.net/forum?id={getattr(paper, 'forum', paper.id)}",
+                }
+                papers_dict[paper.id] = join_list_values(paper_data)
+
+        except Exception as e:
+            logger.error(f"Error during extraction: {e}")
+            raise
 
         papers_list = list(papers_dict.values())
         logger.info(f"Total papers extracted: {len(papers_list)}")
@@ -296,16 +331,16 @@ class OpenReviewFinder:
 
     def _load_collection(self):
         """Load the ChromaDB collection with the SPECTER2 embedder."""
-        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        chroma_client = chromadb.PersistentClient(path=self.config.db_path)
         try:
-            # Use consistent embedding function
-            embedding_function = SPECTER2Embedder()
-
             # First try to get the existing collection
             try:
-                logger.info(f"Attempting to load collection: {COLLECTION_NAME}")
+                logger.info(
+                    f"Attempting to load collection: {self.config.collection_name}"
+                )
                 collection = chroma_client.get_collection(
-                    name=COLLECTION_NAME, embedding_function=embedding_function
+                    name=self.config.collection_name,
+                    embedding_function=self.embedding_function,
                 )
                 logger.info(
                     f"Successfully loaded collection with {collection.count()} documents"
@@ -316,12 +351,12 @@ class OpenReviewFinder:
                 logger.warning(f"Could not load existing collection: {e}")
 
                 # If collection doesn't exist, create it
-                logger.info(f"Creating new collection: {COLLECTION_NAME}")
+                logger.info(f"Creating new collection: {self.config.collection_name}")
                 collection = chroma_client.create_collection(
-                    name=COLLECTION_NAME,
-                    embedding_function=embedding_function,
+                    name=self.config.collection_name,
+                    embedding_function=self.embedding_function,
                     metadata={
-                        "description": "ICLR 2025 papers with SPECTER2 embeddings"
+                        "description": f"{self.config.label} papers with SPECTER2 embeddings"
                     },
                 )
                 logger.info("New collection created. Please run indexing.")
@@ -342,23 +377,36 @@ class OpenReviewFinder:
             CachedOpenReviewClient().cache.clear()
 
         papers = self.extract_papers()
-        chroma_client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        chroma_client = chromadb.PersistentClient(path=self.config.db_path)
 
+        collection = None
         try:
-            collection = chroma_client.get_collection(COLLECTION_NAME)
-            if force or collection.count() < len(papers):
-                chroma_client.delete_collection(COLLECTION_NAME)
-                logger.info("Deleted existing collection; rebuilding index.")
+            collection = chroma_client.get_collection(
+                name=self.config.collection_name,
+                embedding_function=self.embedding_function,
+            )
+            existing = collection.count()
+            if force or existing < len(papers):
+                logger.info(
+                    f"Existing collection has {existing} docs, need {len(papers)}; deleting."
+                )
+                chroma_client.delete_collection(self.config.collection_name)
                 collection = None
+            else:
+                logger.info(
+                    f"Collection already has {existing} docs (>= {len(papers)}); skipping reindex."
+                )
+                return collection
         except Exception:
             collection = None
 
-        if not collection:
-            embedding_function = SPECTER2Embedder()
+        if collection is None:
             collection = chroma_client.create_collection(
-                name=COLLECTION_NAME,
-                embedding_function=embedding_function,
-                metadata={"description": "ICLR 2025 papers with SPECTER2 embeddings"},
+                name=self.config.collection_name,
+                embedding_function=self.embedding_function,
+                metadata={
+                    "description": f"{self.config.label} papers with SPECTER2 embeddings"
+                },
             )
 
         total_batches = (len(papers) + batch_size - 1) // batch_size
@@ -370,8 +418,9 @@ class OpenReviewFinder:
                 collection.add(documents=documents, metadatas=batch_papers, ids=ids)
                 logger.info(f"Indexed batch {i // batch_size + 1}/{total_batches}.")
             except Exception as e:
-                logger.error(f"Error indexing batch {i // batch_size + 1}: {e}")
-                continue
+                # Fail fast - don't continue if embeddings are broken
+                logger.error(f"Fatal error indexing batch {i // batch_size + 1}: {e}")
+                raise
 
         logger.info(f"Indexing complete. Indexed {len(papers)} papers.")
         return collection
@@ -429,7 +478,7 @@ class OpenReviewFinder:
         query_args = dict(
             query_texts=[query],
             n_results=num_results,
-            include=["metadatas", "documents", "distances", "embeddings"],
+            include=["metadatas", "documents", "distances"],
         )
 
         # Add document filters if any
@@ -464,8 +513,8 @@ class OpenReviewFinder:
 
         # Log collection details
         logger.info("Collection details:")
-        logger.info(f"  - Collection name: {COLLECTION_NAME}")
-        logger.info(f"  - Collection path: {CHROMA_DB_PATH}")
+        logger.info(f"  - Collection name: {self.config.collection_name}")
+        logger.info(f"  - Collection path: {self.config.db_path}")
 
         # Print query details in a clean format for debugging
         logger.info(f"Query text: '{query}'")
@@ -730,8 +779,8 @@ def create_gradio_interface(finder):
         # Return the HTML results and updated history HTML
         return html_results, history_html
 
-    with gr.Blocks(title="ICLR 2025 Paper Search") as app:
-        gr.Markdown("# ICLR 2025 Paper Search Engine")
+    with gr.Blocks(title=f"{finder.config.label} Paper Search") as app:
+        gr.Markdown(f"# {finder.config.label} Paper Search Engine")
 
         gr.Markdown(
             "Search for papers using semantic similarity with SPECTER2 embeddings"
@@ -761,10 +810,10 @@ def create_gradio_interface(finder):
 
         # Add footer with credits at the bottom of the page
         with gr.Row():
-            gr.HTML("""
+            gr.HTML(f"""
             <div style="margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; width: 100%;">
                 <p style="text-align: center; color: #666;">
-                    <strong>ICLR 2025 Paper Search</strong> | Developed by
+                    <strong>{finder.config.label} Paper Search</strong> | Developed by
                     <a href="https://danmackinlay.name" target="_blank">Dan MacKinlay</a> |
                     <a href="https://www.csiro.au/" target="_blank">CSIRO</a>
                     (Commonwealth Scientific and Industrial Research Organisation)
@@ -796,14 +845,14 @@ def create_gradio_interface(finder):
 @click.group()
 @click.version_option(version="1.0.0")
 def cli():
-    """ICLR Paper Search Utility - use semantic search on ICLR 2025 papers.
+    """NeurIPS Paper Search Utility - use semantic search on NeurIPS 2025 papers.
 
     Developed by Dan MacKinlay (https://danmackinlay.name)
     CSIRO - Commonwealth Scientific and Industrial Research Organisation
     """
     # Display attribution banner on startup
     click.echo("=" * 80)
-    click.echo("ICLR 2025 Paper Search")
+    click.echo("NeurIPS 2025 Paper Search")
     click.echo("Developed by Dan MacKinlay (https://danmackinlay.name)")
     click.echo("CSIRO - Commonwealth Scientific and Industrial Research Organisation")
     click.echo("=" * 80)
