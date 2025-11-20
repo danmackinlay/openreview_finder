@@ -62,13 +62,58 @@ os.makedirs(NEURIPS2025.db_path, exist_ok=True)
 # ===================
 # Logging Configuration
 # ===================
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler("openreview_finder.log")],
-)
-logger = logging.getLogger(__name__)
-logging.getLogger("chromadb").setLevel(logging.INFO)
+def setup_logging(verbosity=0):
+    """
+    Configure logging based on verbosity level.
+
+    Args:
+        verbosity: 0 (normal), 1 (verbose), 2+ (debug)
+    """
+    # Determine log levels based on verbosity
+    if verbosity >= 2:
+        console_level = logging.DEBUG
+        file_level = logging.DEBUG
+        chroma_level = logging.DEBUG
+    elif verbosity == 1:
+        console_level = logging.INFO
+        file_level = logging.INFO
+        chroma_level = logging.INFO
+    else:  # verbosity == 0 (default)
+        console_level = logging.WARNING
+        file_level = logging.INFO  # Keep detailed file logs
+        chroma_level = logging.WARNING
+
+    # Clear any existing handlers
+    root_logger = logging.getLogger()
+    root_logger.handlers.clear()
+
+    # Create formatters
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+    # Console handler (verbosity-dependent)
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(console_level)
+    console_handler.setFormatter(formatter)
+
+    # File handler (always detailed)
+    file_handler = logging.FileHandler("openreview_finder.log")
+    file_handler.setLevel(file_level)
+    file_handler.setFormatter(formatter)
+
+    # Configure root logger
+    root_logger.setLevel(logging.DEBUG)  # Capture everything
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+
+    # Configure third-party loggers
+    logging.getLogger("chromadb").setLevel(chroma_level)
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # Silence HTTP logs
+
+    return logging.getLogger(__name__)
+
+
+# Initialize with default (quiet) logging
+logger = setup_logging(verbosity=0)
 
 
 # ===================
@@ -864,19 +909,26 @@ def create_gradio_interface(finder):
 # ===================
 @click.group()
 @click.version_option(version="1.0.0")
-def cli():
+@click.option(
+    "--verbose",
+    "-v",
+    count=True,
+    help="Increase verbosity (use -v for verbose, -vv for debug)",
+)
+@click.pass_context
+def cli(ctx, verbose):
     """NeurIPS Paper Search Utility - use semantic search on NeurIPS 2025 papers.
 
     Developed by Dan MacKinlay (https://danmackinlay.name)
     CSIRO - Commonwealth Scientific and Industrial Research Organisation
     """
-    # Display attribution banner on startup
-    click.echo("=" * 80)
-    click.echo("NeurIPS 2025 Paper Search")
-    click.echo("Developed by Dan MacKinlay (https://danmackinlay.name)")
-    click.echo("CSIRO - Commonwealth Scientific and Industrial Research Organisation")
-    click.echo("=" * 80)
-    click.echo("")  # Empty line for spacing
+    # Store verbosity in context for subcommands
+    ctx.ensure_object(dict)
+    ctx.obj["verbosity"] = verbose
+
+    # Setup logging based on verbosity
+    global logger
+    logger = setup_logging(verbosity=verbose)
 
 
 @cli.command()
@@ -886,6 +938,14 @@ def cli():
 @click.option("--batch-size", default=50, help="Batch size for indexing")
 def index(force, batch_size):
     """Extract papers from OpenReview and build the search index."""
+    # Display attribution banner for long-running indexing operation
+    click.echo("=" * 80)
+    click.echo("NeurIPS 2025 Paper Search")
+    click.echo("Developed by Dan MacKinlay (https://danmackinlay.name)")
+    click.echo("CSIRO - Commonwealth Scientific and Industrial Research Organisation")
+    click.echo("=" * 80)
+    click.echo("")
+
     start_time = time.time()
     finder = OpenReviewFinder()
     finder.build_index(batch_size=batch_size, force=force)
