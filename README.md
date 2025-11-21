@@ -2,27 +2,13 @@
 
 A tool for extracting and semantically searching NeurIPS 2025 conference papers using SPECTER2 embeddings.
 
-Indexes **5,275 accepted papers** from NeurIPS 2025 using the OpenReview API v2 with `venueid` filtering for robust paper selection.
+Indexes **5,275 accepted papers** from NeurIPS 2025 using the OpenReview API v2.
+Runs a local web server on your laptop from which you can explore papers by topic.
 
 **Developed by [Dan MacKinlay](https://danmackinlay.name) | [CSIRO](https://www.csiro.au/) (Commonwealth Scientific and Industrial Research Organisation)**
 
 ![](search.png)
 
-## Quick Start
-
-```bash
-# Install dependencies
-uv sync
-
-# Index NeurIPS 2025 papers (~10 minutes, one-time setup)
-uv run openreview-finder index
-
-# Search papers semantically
-uv run openreview-finder search "diffusion models for image generation" -n 5
-
-# Launch web interface
-uv run openreview-finder web
-```
 
 ## Features
 
@@ -34,7 +20,7 @@ uv run openreview-finder web
 - Web interface for interactive searching
 - Command-line interface for batch processing
 
-## Installation
+## Installation / Quickstart
 
 1. [Make sure uv is installed](https://github.com/astral-sh/uv)
 
@@ -43,48 +29,18 @@ uv run openreview-finder web
    git clone https://github.com/danmackinlay/openreview-finder.git
    cd openreview-finder
    ```
+3. Index the papers (~10 minutes, one-time setup)
+   ```bash
+   uv run openreview-finder index
+   ```
+4. Launch web interface
+   ```bash
+   uv run openreview-finder web
+   ```
 
+More options are available in the CLI help.
 
-## Usage
-
-### Extracting and Indexing Papers
-
-To extract papers from OpenReview and build the search index:
-
-```bash
-uv run openreview-finder index
-```
-
-This process is robust against network outages - if interrupted, you can run the same command again to resume from the last checkpoint.
-
-Options:
-```
---batch-size INTEGER  Batch size for indexing (default: 50)
---force               Force reindexing even if data already exists
---help                Show this message and exit.
-```
-
-### Searching Papers
-
-To search for papers using the command line:
-
-```bash
-uv run openreview-finder search "transformer architecture improvements"
-```
-
-Advanced search options:
-
-```
-Options:
-  -n, --num-results INTEGER     Number of results to return (default: 10)
-  -f, --format [text|json|csv]  Output format (default: text)
-  -o, --output TEXT             Output file path
-  -a, --author TEXT             Filter by author name (can use multiple times)
-  -k, --keyword TEXT            Filter by keyword (can use multiple times)
-  --help                        Show this message and exit.
-```
-
-Examples:
+##  Examples
 
 ```bash
 # Limit to top 5 results
@@ -117,21 +73,7 @@ $ uv run openreview-finder search "diffusion models for image generation" -n 3
 ├─────┼─────────────────────────────────────────────────────────────────────────────────────────┼──────────────────────────────────────────────────────────────────┼─────────┤
 │   3 │ DiCo: Revitalizing ConvNets for Scalable and Efficient Diffusion Modeling               │ ['Yuang Ai', 'Qihang Fan', 'Xuefeng Hu', 'et al']                │  0.8816 │
 ╘═════╧═════════════════════════════════════════════════════════════════════════════════════════╧══════════════════════════════════════════════════════════════════╧═════════╛```
-
-### Web Interface
-
-To launch the web interface for interactive searching:
-
-```bash
-uv run openreview-finder web
 ```
-
-This opens a Gradio web interface in your browser with:
-- Search box for semantic queries
-- Slider to control number of results
-- Filters for authors and keywords
-- Interactive search history
-- Links to papers and discussions
 
 ## Technical Details
 
@@ -184,4 +126,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - [OpenReview](https://openreview.net/) for providing the API
 - [CSIRO](https://www.csiro.au/) for supporting this work
 
----
+
