@@ -10,6 +10,7 @@ import json
 import time
 import re
 import logging
+from urllib.parse import quote_plus
 import click
 import torch
 import pandas as pd
@@ -652,6 +653,7 @@ class OpenReviewFinder:
             )
             # Use consistent color for all papers
             paper_color = "#7f8c8d"
+            neurips_url = f"https://neurips.cc/virtual/2025/loc/san-diego/papers.html?filter=title&search={quote_plus(paper['title'])}"
             html += f"""
             <div style="margin-bottom: 25px; padding: 15px; border-left: 5px solid {paper_color}; background-color: #f9f9f9;">
                 <h3 style="margin-top: 0; color: #2c3e50;">{i + 1}. {paper["title"]} {score_display}</h3>
@@ -660,7 +662,8 @@ class OpenReviewFinder:
                 <p><b>Keywords:</b> {paper["keywords"]}</p>
                 <div>
                     <a href="{paper["pdf_url"]}" target="_blank" style="display: inline-block; margin-right: 10px; padding: 5px 10px; background-color: #3498db; color: white; text-decoration: none; border-radius: 3px;">View PDF</a>
-                    <a href="{paper["forum_url"]}" target="_blank" style="display: inline-block; padding: 5px 10px; background-color: #2ecc71; color: white; text-decoration: none; border-radius: 3px;">Discussion Forum</a>
+                    <a href="{paper["forum_url"]}" target="_blank" style="display: inline-block; margin-right: 10px; padding: 5px 10px; background-color: #2ecc71; color: white; text-decoration: none; border-radius: 3px;">Discussion Forum</a>
+                    <a href="{neurips_url}" target="_blank" style="display: inline-block; padding: 5px 10px; background-color: #9b59b6; color: white; text-decoration: none; border-radius: 3px;">NeurIPS</a>
                 </div>
             </div>
             """
